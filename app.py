@@ -14,10 +14,25 @@ import io
 import os
 import re
 import time
+import sys
 from datetime import datetime
 
 import pandas as pd
 import numpy as np
+
+# 新增模块
+try:
+    from report_generator import generate_word_report
+except ImportError:
+    generate_word_report = None
+
+try:
+    from pharma_db import (
+        load_tcmsp, load_drugbank, load_ttd,
+        match_pharma_db, compute_pharma_evidence_score
+    )
+except ImportError:
+    load_tcmsp = load_drugbank = load_ttd = match_pharma_db = compute_pharma_evidence_score = None
 import streamlit as st
 from scipy import stats
 import matplotlib
@@ -873,11 +888,12 @@ def main():
     # ===== 主区域：分析结果展示 =====
     if st.session_state['analysis_done']:
         # ===== 标签页 =====
-        tab1, tab2, tab3, tab4 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📊 Data Overview & Downloads",
             "📈 Visualization",
             "⭐ Star Molecules",
             "🧬 KEGG Enrichment",
+            "💊 Pharma DB",
         ])
 
         # ---------- Tab 1: 数据概览 + 下载 ----------
@@ -947,6 +963,69 @@ def main():
             col_dl3.caption(f"{len(st.session_state['abundance_df'])} rows")
 
             st.markdown("---")
+
+            # ===== Word 报告下载 =====
+            if generate_word_report is not None:
+                st.subheader("Download Analysis Report")
+                if st.button("Generate Word Report", type="secondary", use_container_width=True):
+                    with st.spinner("Generating Word report..."):
+                        try:
+                            fig_hm_bytes = None
+                            fig_bx_bytes = None
+                            fig_vip_bytes = None
+                            fig_bubble_bytes = None
+                            fig_bar_bytes = None
+                            # 尝试复用已生成的图表字节
+                            try:
+                                from io import BytesIO
+                                buf = BytesIO()
+                                pharma_df = st.session_state['pharma_df']
+                                abundance_df = st.session_state['abundance_df']
+                                annotated_df = st.session_state['annotated_df']
+                                star_df = st.session_state.get('star_df', pharma_df)
+
+                                params = {
+                                    'vip_thresh': st.session_state.get('vip_thresh', 1.0),
+                                    'p_thresh': st.session_state.get('p_thresh', 0.05),
+                                    'n_diff': len(st.session_state['diff_filtered']),
+                                    'n_named': int((annotated_df['compound_name'].notna() & (annotated_df['compound_name'] != '-')).sum()),
+                                    'n_pharma': len(pharma_df),
+                                    'n_star': len(star_df),
+                                }
+                                doc_bytes = generate_word_report(
+                                    annotated_df=annotated_df,
+                                    pharma_df=pharma_df,
+                                    star_df=star_df,
+                                    abundance_df=abundance_df,
+                                    params=params,
+                                    fig_heatmap_bytes=fig_hm_bytes,
+                                    fig_boxplot_bytes=fig_bx_bytes,
+                                    fig_vip_bytes=fig_vip_bytes,
+                                    fig_bubble_bytes=fig_bubble_bytes,
+                                    fig_enr_bar_bytes=fig_bar_bytes,
+                                    enr_df=st.session_state.get('enr_df'),
+                                )
+                            except Exception as e:
+                                doc_bytes = None
+                                st.warning(f"Report generation partially failed: {e}")
+
+                        except Exception as e:
+                            doc_bytes = None
+                            st.error(f"Report generation failed: {e}")
+
+                    if doc_bytes:
+                        st.success("Report generated successfully!")
+                        st.download_button(
+                            "Download Word Report (.docx)",
+                            data=doc_bytes,
+                            file_name=f"metabolite_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M')}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                        )
+            else:
+                st.caption("Note: python-docx not installed. Run: pip install python-docx")
+
+            st.markdown("---")
             st.subheader("Preview: Pharmacological Candidates")
             display_cols = ['Metabolite', 'compound_name', 'super_class', 'Vip_plsda', 'P_value', 'FC', '_pharma_reason']
             display_cols = [c for c in display_cols if c in st.session_state['pharma_df'].columns]
@@ -1013,7 +1092,15 @@ def main():
         with tab3:
             st.subheader("Star Molecule Selection")
 
-            star_df = st.session_state['star_df'].copy()
+            # 优先使用含药理证据的 v2 评分，否则用原始评分
+            if 'star_df_v2' in st.session_state:
+                star_df = st.session_state['star_df_v2'].copy()
+                score_col = '_star_score_v2'
+                st.info("已更新为含药理证据的综合评分 (v2)")
+            else:
+                star_df = st.session_state['star_df'].copy()
+                score_col = '_star_score'
+
             all_super_classes = sorted(star_df['super_class'].dropna().unique().tolist())
 
             # 筛选控件
@@ -1057,7 +1144,7 @@ def main():
 
             top10 = filtered_star.head(10)
             cols_show = ['Metabolite', 'compound_name', 'super_class', 'Vip_plsda',
-                         '_diff_ratio', '_star_score', '_pharma_reason']
+                         '_diff_ratio', score_col, '_pharma_reason']
             cols_show = [c for c in cols_show if c in top10.columns]
 
             for idx, row in top10.iterrows():
@@ -1070,7 +1157,7 @@ def main():
                         sc = row.get('super_class', '-')
                         vip = row.get('Vip_plsda', 0)
                         diff_r = row.get('_diff_ratio', 0)
-                        score = row.get('_star_score', 0)
+                        score = row.get(score_col, row.get('_star_score', 0))
                         reason = row.get('_pharma_reason', '')
                         st.markdown(
                             f"**#{rank} {metab_name}**  "
@@ -1095,7 +1182,7 @@ def main():
             # 详细表格
             st.subheader("Full Filtered List (with Scores)")
             table_cols = ['Metabolite', 'compound_name', 'super_class', 'Vip_plsda',
-                          '_diff_ratio', '_star_score', '_vip_norm', '_diff_norm', '_pharma_score',
+                          '_diff_ratio', score_col, '_vip_norm', '_diff_norm', '_pharma_score',
                           'LJ_mean_abundance', 'BC_mean_abundance', 'XY_mean_abundance',
                           'EH_mean_abundance', 'MB_mean_abundance']
             table_cols = [c for c in table_cols if c in filtered_star.columns]
@@ -1103,7 +1190,7 @@ def main():
                 filtered_star[table_cols].style.format({
                     'Vip_plsda': '{:.4f}',
                     '_diff_ratio': '{:.2f}',
-                    '_star_score': '{:.3f}',
+                    score_col: '{:.3f}',
                     '_vip_norm': '{:.3f}',
                     '_diff_norm': '{:.3f}',
                     '_pharma_score': '{:.2f}',
@@ -1356,6 +1443,191 @@ def main():
                     st.plotly_chart(fig_dist, use_container_width=True)
                 else:
                     st.info("No KEGG pathway IDs found in pharmacological candidates.")
+
+        # ---------- Tab 5: 药理数据库查询 ----------
+        with tab5:
+            st.subheader("Pharmacology Database Integration")
+            st.markdown(
+                "上传 TCMSP / DrugBank / TTD 离线数据库文件，"
+                "为候选化合物匹配药理活性记录，并计算**药理证据评分**（纳入明星分子评分体系）。"
+            )
+
+            if pharma_db is None:
+                st.error(
+                    "pharma_db.py 模块未正确加载。"
+                    "请确保 pharma_db.py 与 app.py 在同一目录下。"
+                )
+            else:
+                # 文件上传区
+                db_col1, db_col2, db_col3 = st.columns(3)
+                with db_col1:
+                    tcmsp_file = st.file_uploader(
+                        "上传 TCMSP 数据库文件",
+                        type=['xlsx', 'xls', 'csv', 'tsv'],
+                        help="TCMSP (Traditional Chinese Medicine Systems Pharmacology) 数据库，"
+                             "包含 OB(%)、DL、BBB 等药代动力学参数。"
+                    )
+                    if tcmsp_file:
+                        st.success(f"Loaded: {tcmsp_file.name}")
+                with db_col2:
+                    drugbank_file = st.file_uploader(
+                        "上传 DrugBank 数据库文件",
+                        type=['csv', 'tsv', 'xml'],
+                        help="DrugBank 数据库，包含药物靶点、适应症、药理活性信息。"
+                    )
+                    if drugbank_file:
+                        st.success(f"Loaded: {drugbank_file.name}")
+                with db_col3:
+                    ttd_file = st.file_uploader(
+                        "上传 TTD 数据库文件",
+                        type=['xlsx', 'xls', 'csv', 'tsv'],
+                        help="TTD (Therapeutic Target Database)，包含药物靶点与疾病关联信息。"
+                    )
+                    if ttd_file:
+                        st.success(f"Loaded: {ttd_file.name}")
+
+                use_stitch = st.checkbox(
+                    "查询 STITCH 化学相互作用数据库（需要网络连接）",
+                    value=False,
+                    help="STITCH (http://stitch.embl.de) 提供化合物-蛋白质相互作用信息，"
+                         "查询需要能够访问国际互联网。"
+                )
+
+                if st.button("Run Pharma DB Query", type="primary", use_container_width=True):
+                    if load_tcmsp is None:
+                        st.error("pharma_db 模块未安装")
+                    else:
+                        with st.spinner("Loading database files..."):
+                            tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
+                            drugbank_data = load_drugbank(drugbank_file) if drugbank_file else {}
+                            ttd_data = load_ttd(ttd_file) if ttd_file else {}
+
+                            st.info(
+                                f"TCMSP: {len(tcmsp_data)} compounds | "
+                                f"DrugBank: {len(drugbank_data)} entries | "
+                                f"TTD: {len(ttd_data)} entries"
+                            )
+
+                        with st.spinner("Matching compounds to pharmacology databases..."):
+                            metabolites = st.session_state['pharma_df']['Metabolite'].tolist()
+
+                            def progress_callback(current, total):
+                                progress_bar.progress(int(current / total * 100))
+
+                            progress_bar = st.progress(0)
+                            pharma_match_df = match_pharma_db(
+                                metabolites=metabolites,
+                                tcmsp_data=tcmsp_data,
+                                drugbank_data=drugbank_data,
+                                ttd_data=ttd_data,
+                                use_stitch=use_stitch,
+                                progress_callback=progress_callback,
+                            )
+                            progress_bar.empty()
+                            st.session_state['pharma_match_df'] = pharma_match_df
+
+                            # 统计命中情况
+                            n_tcmsp = pharma_match_df['TCMSP_OB'].notna().sum()
+                            n_drugbank = (pharma_match_df['DrugBank_Targets'] != '-').sum()
+                            n_ttd = (pharma_match_df['TTD_Targets'] != '-').sum()
+                            n_active = (pharma_match_df['Pharma_Evidence_Score'] > 0).sum()
+                            st.success(
+                                f"匹配完成！TCMSP命中: {n_tcmsp} | DrugBank命中: {n_drugbank} | "
+                                f"TTD命中: {n_ttd} | 有药理证据: {n_active} / {len(pharma_match_df)}"
+                            )
+
+                        # 保存匹配结果用于更新明星分子评分
+                        st.session_state['pharma_match_df'] = pharma_match_df
+
+                        # 更新明星分子评分（加入药理证据维度）
+                        if 'star_df' in st.session_state and len(st.session_state['star_df']) > 0:
+                            with st.spinner("Recalculating star scores with pharma evidence..."):
+                                star_df = st.session_state['star_df'].copy()
+                                # 合并药理证据评分
+                                score_map = pharma_match_df.set_index('Metabolite')['Pharma_Evidence_Score'].to_dict()
+                                star_df['_pharma_evidence'] = star_df['Metabolite'].map(score_map).fillna(0)
+
+                                # 更新综合评分：原三维度 + 药理证据
+                                # 重新归一化药理证据分数
+                                pe_max = star_df['_pharma_evidence'].max()
+                                star_df['_pharma_evidence_norm'] = (
+                                    star_df['_pharma_evidence'] / pe_max if pe_max > 0
+                                    else star_df['_pharma_evidence'] * 0
+                                )
+
+                                # 调整权重：VIP×0.25 + diff×0.25 + pharma_class×0.30 + pharma_evidence×0.20
+                                star_df['_star_score_v2'] = (
+                                    star_df['_vip_norm'].fillna(0) * 0.25 +
+                                    star_df['_diff_norm'].fillna(0) * 0.25 +
+                                    star_df['_pharma_score'].fillna(0) * 0.30 +
+                                    star_df['_pharma_evidence_norm'].fillna(0) * 0.20
+                                )
+                                star_df = star_df.sort_values('_star_score_v2', ascending=False).reset_index(drop=True)
+                                st.session_state['star_df_v2'] = star_df
+                            st.success("明星分子评分已更新（含药理证据维度）！请切换到 Star Molecules 标签页查看。")
+
+                # 显示药理匹配结果
+                if 'pharma_match_df' in st.session_state and len(st.session_state['pharma_match_df']) > 0:
+                    pm_df = st.session_state['pharma_match_df']
+
+                    st.markdown("---")
+                    st.subheader("Pharmacology Match Results")
+
+                    # 统计卡片
+                    pc1, pc2, pc3, pc4 = st.columns(4)
+                    n_tcmsp = pm_df['TCMSP_OB'].notna().sum()
+                    n_db = (pm_df['DrugBank_Targets'] != '-').sum()
+                    n_ttd = (pm_df['TTD_Targets'] != '-').sum()
+                    n_active = (pm_df['Pharma_Evidence_Score'] > 0).sum()
+                    pc1.metric("TCMSP Hits", f"{n_tcmsp}")
+                    pc2.metric("DrugBank Hits", f"{n_db}")
+                    pc3.metric("TTD Hits", f"{n_ttd}")
+                    pc4.metric("With Evidence", f"{n_active}/{len(pm_df)}")
+
+                    # 药理证据评分分布图
+                    st.markdown("**Pharma Evidence Score Distribution**")
+                    fig_ev = px.histogram(
+                        pm_df,
+                        x='Pharma_Evidence_Score',
+                        nbins=20,
+                        title='Pharmacological Evidence Score Distribution',
+                        labels={'Pharma_Evidence_Score': 'Evidence Score', 'count': 'Count'},
+                        color_discrete_sequence=['#2ECC71'],
+                    )
+                    fig_ev.update_layout(height=350)
+                    st.plotly_chart(fig_ev, use_container_width=True)
+
+                    # 结果表格
+                    st.markdown("**Full Match Results**")
+                    display_cols = [
+                        'Metabolite', 'TCMSP_OB', 'TCMSP_DL',
+                        'DrugBank_Targets', 'DrugBank_Indications',
+                        'TTD_Targets', 'TTD_Diseases',
+                        'Pharma_Evidence_Score', 'Pharma_Evidence'
+                    ]
+                    avail_cols = [c for c in display_cols if c in pm_df.columns]
+                    st.dataframe(
+                        pm_df[avail_cols].style.format({
+                            'TCMSP_OB': lambda x: f'{x:.1f}' if pd.notna(x) else '-',
+                            'TCMSP_DL': lambda x: f'{x:.3f}' if pd.notna(x) else '-',
+                            'Pharma_Evidence_Score': '{:.2f}',
+                        }, na_rep='-'),
+                        use_container_width=True,
+                        height=500,
+                    )
+
+                    # 下载匹配结果
+                    match_bytes = io.BytesIO()
+                    with pd.ExcelWriter(match_bytes, engine='openpyxl') as writer:
+                        pm_df.to_excel(writer, index=False, sheet_name='Pharma_Match')
+                    match_bytes.seek(0)
+                    st.download_button(
+                        "Download Pharma Match Results",
+                        data=match_bytes.getvalue(),
+                        file_name="pharma_database_match.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
     else:
         # 未运行分析时显示说明
         st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")

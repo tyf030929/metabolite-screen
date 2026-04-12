@@ -7,3 +7,4 @@ matplotlib>=3.7.0
 scipy>=1.10.0
 plotly>=5.15.0
 gseapy>=1.0.0
+python-docx>=1.0.0
