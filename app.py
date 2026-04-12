@@ -1384,14 +1384,39 @@ def main():
                         "点击下方链接，在 KEGG Mapper 中将自动高亮显示命中的化合物："
                     )
                     unique_pids = sig_df['KEGG_ID'].dropna().unique()
+                    top_pids = list(unique_pids[:10])
+
+                    # 方案1：KEGG Mapper search_pathway 模式（以通路ID为关键词搜索）
                     mapper_url = (
-                        "https://www.genome.jp/kegg/mapper/"
-                        + "?org_name=hsa&mode=compound&pathway="
-                        + '+'.join([str(p) for p in unique_pids[:10]])
+                        "https://www.genome.jp/kegg/mapper/search_pathway/"
+                        + "?keywords=" + '+'.join([str(p) for p in top_pids])
+                    )
+
+                    # 方案2：KEGG Search（搜索化合物）
+                    kegg_search_url = (
+                        "https://www.genome.jp/kegg/compound/"
+                        + "?search=" + '+'.join([str(p) for p in top_pids[:5]])
+                    )
+
+                    # 方案3：KEGG BRITE（浏览生物通路）
+                    brite_url = "https://www.genome.jp/kegg/brite.html"
+
+                    st.markdown("**KEGG Pathway Visualization Links**")
+                    st.markdown(
+                        f"[1. KEGG Mapper - Search Pathways (Top 10 IDs)]({mapper_url})",
+                        unsafe_allow_html=True
                     )
                     st.markdown(
-                        f"[Open KEGG Mapper (Top 10 pathways)]({mapper_url})",
+                        f"[2. KEGG Search - Search by Pathway IDs]({kegg_search_url})",
                         unsafe_allow_html=True
+                    )
+                    st.markdown(
+                        f"[3. KEGG BRITE - Browse Biological Pathways]({brite_url})",
+                        unsafe_allow_html=True
+                    )
+                    st.caption(
+                        "提示：KEGG Mapper 需手动在高亮页面输入化合物名称。"
+                        "MetaboAnalyst（https://metaboanalyst.ca）支持直接上传化合物列表进行通路富集可视化。"
                     )
 
                     # ---- 下载 ----
@@ -1452,7 +1477,7 @@ def main():
                 "为候选化合物匹配药理活性记录，并计算**药理证据评分**（纳入明星分子评分体系）。"
             )
 
-            if pharma_db is None:
+            if match_pharma_db is None:
                 st.error(
                     "pharma_db.py 模块未正确加载。"
                     "请确保 pharma_db.py 与 app.py 在同一目录下。"
