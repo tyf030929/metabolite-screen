@@ -33,6 +33,11 @@ try:
     )
 except ImportError:
     load_tcmsp = load_drugbank = load_ttd = match_pharma_db = compute_pharma_evidence_score = None
+
+try:
+    from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online
+except ImportError:
+    match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = None
 import streamlit as st
 from scipy import stats
 import matplotlib
@@ -1471,116 +1476,158 @@ def main():
 
         # ---------- Tab 5: 药理数据库查询 ----------
         with tab5:
-            st.subheader("Pharmacology Database Integration")
+            st.subheader("Pharmacology Database Integration (Auto-Download)")
             st.markdown(
-                "上传 TCMSP / DrugBank / TTD 离线数据库文件，"
-                "为候选化合物匹配药理活性记录，并计算**药理证据评分**（纳入明星分子评分体系）。"
+                "自动从 **DrugCentral** 和 **PubChem** 在线查询候选化合物的药理活性信息。"
+                "首次查询时自动下载 DrugCentral 数据库（仅一次），之后从本地缓存读取。"
             )
 
-            if match_pharma_db is None:
+            if match_pharma_online is None:
                 st.error(
-                    "pharma_db.py 模块未正确加载。"
-                    "请确保 pharma_db.py 与 app.py 在同一目录下。"
+                    "pharma_cache.py 模块未正确加载。"
+                    "请确保 pharma_cache.py 与 app.py 在同一目录下。"
                 )
             else:
-                # 文件上传区
-                db_col1, db_col2, db_col3 = st.columns(3)
-                with db_col1:
-                    tcmsp_file = st.file_uploader(
-                        "上传 TCMSP 数据库文件",
-                        type=['xlsx', 'xls', 'csv', 'tsv'],
-                        help="TCMSP (Traditional Chinese Medicine Systems Pharmacology) 数据库，"
-                             "包含 OB(%)、DL、BBB 等药代动力学参数。"
+                # ---- 自动在线查询区 ----
+                st.markdown("#### 自动在线查询（DrugCentral + PubChem）")
+                col_info1, col_info2 = st.columns(2)
+                with col_info1:
+                    st.info(
+                        "**DrugCentral**: 自动下载药物-靶点互作数据（含 2021_09_01 版本，~800KB）"
                     )
-                    if tcmsp_file:
-                        st.success(f"Loaded: {tcmsp_file.name}")
-                with db_col2:
-                    drugbank_file = st.file_uploader(
-                        "上传 DrugBank 数据库文件",
-                        type=['csv', 'tsv', 'xml'],
-                        help="DrugBank 数据库，包含药物靶点、适应症、药理活性信息。"
+                with col_info2:
+                    st.info(
+                        "**PubChem PUG REST**: 查询化合物 SMILES、XLogP、BioActivity 等属性"
                     )
-                    if drugbank_file:
-                        st.success(f"Loaded: {drugbank_file.name}")
-                with db_col3:
-                    ttd_file = st.file_uploader(
-                        "上传 TTD 数据库文件",
-                        type=['xlsx', 'xls', 'csv', 'tsv'],
-                        help="TTD (Therapeutic Target Database)，包含药物靶点与疾病关联信息。"
-                    )
-                    if ttd_file:
-                        st.success(f"Loaded: {ttd_file.name}")
 
-                use_stitch = st.checkbox(
-                    "查询 STITCH 化学相互作用数据库（需要网络连接）",
-                    value=False,
-                    help="STITCH (http://stitch.embl.de) 提供化合物-蛋白质相互作用信息，"
-                         "查询需要能够访问国际互联网。"
+                online_query_btn = st.button(
+                    "Start Online Pharma Query (Auto-Download)",
+                    type="primary",
+                    use_container_width=True,
+                    help="首次运行时会自动下载 DrugCentral 数据库（约 1-2 分钟），之后直接使用缓存"
                 )
 
-                if st.button("Run Pharma DB Query", type="primary", use_container_width=True):
-                    if load_tcmsp is None:
-                        st.error("pharma_db 模块未安装")
-                    else:
-                        with st.spinner("Loading database files..."):
+                if online_query_btn:
+                    with st.spinner("首次使用，正在下载 DrugCentral 数据库（仅下载一次）..."):
+                        metabolites = st.session_state['pharma_df']['Metabolite'].tolist()
+
+                        def progress_callback(current, total):
+                            progress_bar.progress(int(current / total * 100))
+
+                        progress_bar = st.progress(0)
+                        pharma_match_df = match_pharma_online(
+                            metabolites=metabolites,
+                            progress_callback=progress_callback,
+                        )
+                        progress_bar.empty()
+                        st.session_state['pharma_match_df'] = pharma_match_df
+
+                        # 统计命中情况
+                        n_dc = pharma_match_df['DrugCentral_Targets'].apply(
+                            lambda x: x != '-' and len(str(x)) > 0 if pd.notna(x) else False
+                        ).sum()
+                        n_pc = (pharma_match_df['PubChem_BioActivity_Count'] > 0).sum()
+                        n_active = (pharma_match_df['Pharma_Evidence_Score'] > 0).sum()
+                        n_sources = pharma_match_df['Data_Sources'].apply(
+                            lambda x: 'DrugCentral' in x or 'PubChem' in x
+                        ).sum()
+                        st.success(
+                            f"查询完成！DrugCentral命中: {n_dc} | PubChem生物活性: {n_pc} | "
+                            f"有药理证据: {n_active} / {len(pharma_match_df)}"
+                        )
+
+                    # 更新明星分子评分（加入药理证据维度）
+                    if 'star_df' in st.session_state and len(st.session_state['star_df']) > 0:
+                        with st.spinner("Recalculating star scores with pharma evidence..."):
+                            star_df = st.session_state['star_df'].copy()
+                            score_map = pharma_match_df.set_index('Metabolite')['Pharma_Evidence_Score'].to_dict()
+                            star_df['_pharma_evidence'] = star_df['Metabolite'].map(score_map).fillna(0)
+                            pe_max = star_df['_pharma_evidence'].max()
+                            star_df['_pharma_evidence_norm'] = (
+                                star_df['_pharma_evidence'] / pe_max if pe_max > 0
+                                else 0
+                            )
+                            # 调整权重：VIP×0.25 + diff×0.25 + pharma_class×0.30 + pharma_evidence×0.20
+                            star_df['_star_score_v2'] = (
+                                star_df['_vip_norm'].fillna(0) * 0.25 +
+                                star_df['_diff_norm'].fillna(0) * 0.25 +
+                                star_df['_pharma_score'].fillna(0) * 0.30 +
+                                star_df['_pharma_evidence_norm'].fillna(0) * 0.20
+                            )
+                            star_df = star_df.sort_values('_star_score_v2', ascending=False).reset_index(drop=True)
+                            st.session_state['star_df_v2'] = star_df
+                        st.success("明星分子评分已更新（含药理证据维度）！请切换到 Star Molecules 标签页查看。")
+
+                # ---- 可选：本地文件上传区（作为补充）----
+                st.markdown("---")
+                st.markdown("#### Optional: Additional Local DB Files (TCMSP / DrugBank / TTD)")
+                if match_pharma_db is not None:
+                    db_col1, db_col2, db_col3 = st.columns(3)
+                    with db_col1:
+                        tcmsp_file = st.file_uploader(
+                            "TCMSP File",
+                            type=['xlsx', 'xls', 'csv', 'tsv'],
+                            help="TCMSP (Traditional Chinese Medicine Systems Pharmacology)"
+                        )
+                    with db_col2:
+                        drugbank_file = st.file_uploader(
+                            "DrugBank File",
+                            type=['csv', 'tsv', 'xml'],
+                            help="DrugBank"
+                        )
+                    with db_col3:
+                        ttd_file = st.file_uploader(
+                            "TTD File",
+                            type=['xlsx', 'xls', 'csv', 'tsv'],
+                            help="TTD (Therapeutic Target Database)"
+                        )
+
+                    local_query_btn = st.button(
+                        "Run Local DB Query (File Upload)",
+                        use_container_width=True,
+                    )
+
+                    if local_query_btn:
+                        with st.spinner("Loading local database files..."):
                             tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
                             drugbank_data = load_drugbank(drugbank_file) if drugbank_file else {}
                             ttd_data = load_ttd(ttd_file) if ttd_file else {}
-
                             st.info(
-                                f"TCMSP: {len(tcmsp_data)} compounds | "
-                                f"DrugBank: {len(drugbank_data)} entries | "
-                                f"TTD: {len(ttd_data)} entries"
+                                f"TCMSP: {len(tcmsp_data)} | DrugBank: {len(drugbank_data)} | TTD: {len(ttd_data)}"
                             )
 
-                        with st.spinner("Matching compounds to pharmacology databases..."):
+                        with st.spinner("Matching compounds..."):
                             metabolites = st.session_state['pharma_df']['Metabolite'].tolist()
-
-                            def progress_callback(current, total):
-                                progress_bar.progress(int(current / total * 100))
-
-                            progress_bar = st.progress(0)
+                            progress_bar2 = st.progress(0)
+                            def pbar(current, total):
+                                progress_bar2.progress(int(current / total * 100))
                             pharma_match_df = match_pharma_db(
                                 metabolites=metabolites,
                                 tcmsp_data=tcmsp_data,
                                 drugbank_data=drugbank_data,
                                 ttd_data=ttd_data,
-                                use_stitch=use_stitch,
-                                progress_callback=progress_callback,
+                                progress_callback=pbar,
                             )
-                            progress_bar.empty()
+                            progress_bar2.empty()
                             st.session_state['pharma_match_df'] = pharma_match_df
 
-                            # 统计命中情况
-                            n_tcmsp = pharma_match_df['TCMSP_OB'].notna().sum()
-                            n_drugbank = (pharma_match_df['DrugBank_Targets'] != '-').sum()
-                            n_ttd = (pharma_match_df['TTD_Targets'] != '-').sum()
-                            n_active = (pharma_match_df['Pharma_Evidence_Score'] > 0).sum()
-                            st.success(
-                                f"匹配完成！TCMSP命中: {n_tcmsp} | DrugBank命中: {n_drugbank} | "
-                                f"TTD命中: {n_ttd} | 有药理证据: {n_active} / {len(pharma_match_df)}"
-                            )
+                        n_tcmsp = pharma_match_df['TCMSP_OB'].notna().sum()
+                        n_db = (pharma_match_df['DrugBank_Targets'] != '-').sum()
+                        n_ttd = (pharma_match_df['TTD_Targets'] != '-').sum()
+                        n_active = (pharma_match_df['Pharma_Evidence_Score'] > 0).sum()
+                        st.success(
+                            f"本地匹配完成！TCMSP: {n_tcmsp} | DrugBank: {n_db} | TTD: {n_ttd} | "
+                            f"有证据: {n_active}/{len(pharma_match_df)}"
+                        )
 
-                        # 保存匹配结果用于更新明星分子评分
-                        st.session_state['pharma_match_df'] = pharma_match_df
-
-                        # 更新明星分子评分（加入药理证据维度）
+                        # 更新明星分子评分
                         if 'star_df' in st.session_state and len(st.session_state['star_df']) > 0:
-                            with st.spinner("Recalculating star scores with pharma evidence..."):
+                            with st.spinner("Recalculating star scores..."):
                                 star_df = st.session_state['star_df'].copy()
-                                # 合并药理证据评分
                                 score_map = pharma_match_df.set_index('Metabolite')['Pharma_Evidence_Score'].to_dict()
                                 star_df['_pharma_evidence'] = star_df['Metabolite'].map(score_map).fillna(0)
-
-                                # 更新综合评分：原三维度 + 药理证据
-                                # 重新归一化药理证据分数
                                 pe_max = star_df['_pharma_evidence'].max()
-                                star_df['_pharma_evidence_norm'] = (
-                                    star_df['_pharma_evidence'] / pe_max if pe_max > 0
-                                    else star_df['_pharma_evidence'] * 0
-                                )
-
-                                # 调整权重：VIP×0.25 + diff×0.25 + pharma_class×0.30 + pharma_evidence×0.20
+                                star_df['_pharma_evidence_norm'] = star_df['_pharma_evidence'] / pe_max if pe_max > 0 else 0
                                 star_df['_star_score_v2'] = (
                                     star_df['_vip_norm'].fillna(0) * 0.25 +
                                     star_df['_diff_norm'].fillna(0) * 0.25 +
@@ -1589,57 +1636,96 @@ def main():
                                 )
                                 star_df = star_df.sort_values('_star_score_v2', ascending=False).reset_index(drop=True)
                                 st.session_state['star_df_v2'] = star_df
-                            st.success("明星分子评分已更新（含药理证据维度）！请切换到 Star Molecules 标签页查看。")
+                            st.success("明星分子评分已更新！请切换到 Star Molecules 标签页查看。")
 
-                # 显示药理匹配结果
+                # ---- 显示药理匹配结果 ----
                 if 'pharma_match_df' in st.session_state and len(st.session_state['pharma_match_df']) > 0:
                     pm_df = st.session_state['pharma_match_df']
+                    is_online = 'Data_Sources' in pm_df.columns  # 判断是在线还是本地结果
 
                     st.markdown("---")
                     st.subheader("Pharmacology Match Results")
 
-                    # 统计卡片
-                    pc1, pc2, pc3, pc4 = st.columns(4)
-                    n_tcmsp = pm_df['TCMSP_OB'].notna().sum()
-                    n_db = (pm_df['DrugBank_Targets'] != '-').sum()
-                    n_ttd = (pm_df['TTD_Targets'] != '-').sum()
-                    n_active = (pm_df['Pharma_Evidence_Score'] > 0).sum()
-                    pc1.metric("TCMSP Hits", f"{n_tcmsp}")
-                    pc2.metric("DrugBank Hits", f"{n_db}")
-                    pc3.metric("TTD Hits", f"{n_ttd}")
-                    pc4.metric("With Evidence", f"{n_active}/{len(pm_df)}")
+                    if is_online:
+                        # 在线结果展示
+                        pc1, pc2, pc3, pc4 = st.columns(4)
+                        n_dc = pm_df['DrugCentral_Targets'].apply(
+                            lambda x: x != '-' and len(str(x)) > 0 if pd.notna(x) else False
+                        ).sum()
+                        n_pc = (pm_df['PubChem_BioActivity_Count'] > 0).sum()
+                        n_active = (pm_df['Pharma_Evidence_Score'] > 0).sum()
+                        pc1.metric("DrugCentral Hits", f"{n_dc}")
+                        pc2.metric("PubChem BioActive", f"{n_pc}")
+                        pc3.metric("PubChem CID", f"{pm_df['PubChem_CID'].notna().sum()}")
+                        pc4.metric("With Evidence", f"{n_active}/{len(pm_df)}")
 
-                    # 药理证据评分分布图
-                    st.markdown("**Pharma Evidence Score Distribution**")
-                    fig_ev = px.histogram(
-                        pm_df,
-                        x='Pharma_Evidence_Score',
-                        nbins=20,
-                        title='Pharmacological Evidence Score Distribution',
-                        labels={'Pharma_Evidence_Score': 'Evidence Score', 'count': 'Count'},
-                        color_discrete_sequence=['#2ECC71'],
-                    )
-                    fig_ev.update_layout(height=350)
-                    st.plotly_chart(fig_ev, use_container_width=True)
+                        # 药理证据评分分布图
+                        st.markdown("**Pharma Evidence Score Distribution**")
+                        fig_ev = px.histogram(
+                            pm_df, x='Pharma_Evidence_Score', nbins=20,
+                            title='Pharmacological Evidence Score Distribution',
+                            labels={'Pharma_Evidence_Score': 'Evidence Score', 'count': 'Count'},
+                            color_discrete_sequence=['#2ECC71'],
+                        )
+                        fig_ev.update_layout(height=350)
+                        st.plotly_chart(fig_ev, use_container_width=True)
 
-                    # 结果表格
-                    st.markdown("**Full Match Results**")
-                    display_cols = [
-                        'Metabolite', 'TCMSP_OB', 'TCMSP_DL',
-                        'DrugBank_Targets', 'DrugBank_Indications',
-                        'TTD_Targets', 'TTD_Diseases',
-                        'Pharma_Evidence_Score', 'Pharma_Evidence'
-                    ]
-                    avail_cols = [c for c in display_cols if c in pm_df.columns]
-                    st.dataframe(
-                        pm_df[avail_cols].style.format({
-                            'TCMSP_OB': lambda x: f'{x:.1f}' if pd.notna(x) else '-',
-                            'TCMSP_DL': lambda x: f'{x:.3f}' if pd.notna(x) else '-',
-                            'Pharma_Evidence_Score': '{:.2f}',
-                        }, na_rep='-'),
-                        use_container_width=True,
-                        height=500,
-                    )
+                        # 结果表格
+                        st.markdown("**Full Match Results**")
+                        display_cols = [
+                            'Metabolite', 'Data_Sources',
+                            'DrugCentral_Targets', 'DrugCentral_Diseases',
+                            'PubChem_CID', 'PubChem_XLogP', 'PubChem_BioActivity_Count',
+                            'PubChem_Targets', 'PubChem_Activities',
+                            'Pharma_Evidence_Score', 'Pharma_Evidence'
+                        ]
+                        avail_cols = [c for c in display_cols if c in pm_df.columns]
+                        st.dataframe(
+                            pm_df[avail_cols].style.format({
+                                'PubChem_XLogP': lambda x: f'{x:.2f}' if pd.notna(x) else '-',
+                                'PubChem_BioActivity_Count': lambda x: int(x) if pd.notna(x) else 0,
+                                'Pharma_Evidence_Score': '{:.2f}',
+                            }, na_rep='-'),
+                            use_container_width=True, height=500,
+                        )
+                    else:
+                        # 本地文件结果展示（原逻辑）
+                        pc1, pc2, pc3, pc4 = st.columns(4)
+                        n_tcmsp = pm_df['TCMSP_OB'].notna().sum()
+                        n_db = (pm_df['DrugBank_Targets'] != '-').sum()
+                        n_ttd = (pm_df['TTD_Targets'] != '-').sum()
+                        n_active = (pm_df['Pharma_Evidence_Score'] > 0).sum()
+                        pc1.metric("TCMSP Hits", f"{n_tcmsp}")
+                        pc2.metric("DrugBank Hits", f"{n_db}")
+                        pc3.metric("TTD Hits", f"{n_ttd}")
+                        pc4.metric("With Evidence", f"{n_active}/{len(pm_df)}")
+
+                        st.markdown("**Pharma Evidence Score Distribution**")
+                        fig_ev = px.histogram(
+                            pm_df, x='Pharma_Evidence_Score', nbins=20,
+                            title='Pharmacological Evidence Score Distribution',
+                            labels={'Pharma_Evidence_Score': 'Evidence Score', 'count': 'Count'},
+                            color_discrete_sequence=['#2ECC71'],
+                        )
+                        fig_ev.update_layout(height=350)
+                        st.plotly_chart(fig_ev, use_container_width=True)
+
+                        st.markdown("**Full Match Results**")
+                        display_cols = [
+                            'Metabolite', 'TCMSP_OB', 'TCMSP_DL',
+                            'DrugBank_Targets', 'DrugBank_Indications',
+                            'TTD_Targets', 'TTD_Diseases',
+                            'Pharma_Evidence_Score', 'Pharma_Evidence'
+                        ]
+                        avail_cols = [c for c in display_cols if c in pm_df.columns]
+                        st.dataframe(
+                            pm_df[avail_cols].style.format({
+                                'TCMSP_OB': lambda x: f'{x:.1f}' if pd.notna(x) else '-',
+                                'TCMSP_DL': lambda x: f'{x:.3f}' if pd.notna(x) else '-',
+                                'Pharma_Evidence_Score': '{:.2f}',
+                            }, na_rep='-'),
+                            use_container_width=True, height=500,
+                        )
 
                     # 下载匹配结果
                     match_bytes = io.BytesIO()
