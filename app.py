@@ -28,11 +28,11 @@ except ImportError:
 
 try:
     from pharma_db import (
-        load_tcmsp, load_drugbank, load_ttd,
+        load_tcmsp, load_tcmsp_from_dir, load_drugbank, load_ttd,
         match_pharma_db, compute_pharma_evidence_score
     )
 except ImportError:
-    load_tcmsp = load_drugbank = load_ttd = match_pharma_db = compute_pharma_evidence_score = None
+    load_tcmsp = load_tcmsp_from_dir = load_drugbank = load_ttd = match_pharma_db = compute_pharma_evidence_score = None
 
 try:
     from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online
@@ -1560,22 +1560,25 @@ def main():
 
                 # ---- 可选：本地文件上传区（作为补充）----
                 st.markdown("---")
-                st.markdown("#### Optional: Additional Local DB Files (TCMSP / DrugBank / TTD)")
+                st.markdown("#### Optional: Local DB Files / Directory (TCMSP / DrugBank / TTD)")
                 if match_pharma_db is not None:
-                    db_col1, db_col2, db_col3 = st.columns(3)
+                    # TCMSP 目录路径输入
+                    tcmsp_dir = st.text_input(
+                        "TCMSP 数据目录路径",
+                        value="",
+                        placeholder=r"C:\Users\tyf\.qclaw\workspace\tcmsp_data",
+                        help="填入 TCMSP 数据文件所在目录，程序将自动扫描并加载所有 CSV 文件（tcmsp_ingredients.csv, tcmsp_targets.csv, tcmsp_diseases.csv）"
+                    ).strip()
+
+                    # DrugBank / TTD 文件上传仍用单文件方式
+                    db_col1, db_col2 = st.columns(2)
                     with db_col1:
-                        tcmsp_file = st.file_uploader(
-                            "TCMSP File",
-                            type=['xlsx', 'xls', 'csv', 'tsv'],
-                            help="TCMSP (Traditional Chinese Medicine Systems Pharmacology)"
-                        )
-                    with db_col2:
                         drugbank_file = st.file_uploader(
                             "DrugBank File",
                             type=['csv', 'tsv', 'xml'],
                             help="DrugBank"
                         )
-                    with db_col3:
+                    with db_col2:
                         ttd_file = st.file_uploader(
                             "TTD File",
                             type=['xlsx', 'xls', 'csv', 'tsv'],
@@ -1583,13 +1586,23 @@ def main():
                         )
 
                     local_query_btn = st.button(
-                        "Run Local DB Query (File Upload)",
+                        "Run Local DB Query",
                         use_container_width=True,
                     )
 
                     if local_query_btn:
                         with st.spinner("Loading local database files..."):
-                            tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
+                            # 优先用目录加载 TCMSP，否则用单文件
+                            if tcmsp_dir:
+                                try:
+                                    tcmsp_data = load_tcmsp_from_dir(tcmsp_dir)
+                                    st.info(f"TCMSP 目录加载: {len(tcmsp_data)} 化合物")
+                                except Exception as e:
+                                    st.warning(f"TCMSP 目录加载失败: {e}，尝试单文件方式")
+                                    tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
+                            else:
+                                tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
+
                             drugbank_data = load_drugbank(drugbank_file) if drugbank_file else {}
                             ttd_data = load_ttd(ttd_file) if ttd_file else {}
                             st.info(
@@ -1713,6 +1726,7 @@ def main():
                         st.markdown("**Full Match Results**")
                         display_cols = [
                             'Metabolite', 'TCMSP_OB', 'TCMSP_DL',
+                            'TCMSP_Targets', 'TCMSP_Diseases',
                             'DrugBank_Targets', 'DrugBank_Indications',
                             'TTD_Targets', 'TTD_Diseases',
                             'Pharma_Evidence_Score', 'Pharma_Evidence'

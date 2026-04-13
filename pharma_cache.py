@@ -10,10 +10,15 @@ import os
 import re
 import time
 import gzip
+import json
 import hashlib
 import requests
 import pandas as pd
 import numpy as np
+
+# ===================== DrugCentral 磁盘缓存路径 =====================
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.pharma_cache')
+_DRUGCENTRAL_CACHE_FILE = os.path.join(_CACHE_DIR, 'drugcentral_data.json')
 
 # ===================== 全局缓存（单例） =====================
 _drugcentral_loaded = False
@@ -31,7 +36,44 @@ _DRUGCENTRAL_STRUCTURES_URL = (
 )
 
 
-def _normalize_name(name: str) -> str:
+def _ensure_cache_dir():
+    """确保缓存目录存在"""
+    if not os.path.exists(_CACHE_DIR):
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+
+
+def _load_drugcentral_from_disk() -> bool:
+    """
+    尝试从磁盘缓存加载 DrugCentral 数据。
+    返回 True 表示成功加载，False 表示缓存不存在或损坏。
+    """
+    if not os.path.exists(_DRUGCENTRAL_CACHE_FILE):
+        return False
+    try:
+        with open(_DRUGCENTRAL_CACHE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        global _drugcentral_targets, _drugcentral_structures
+        _drugcentral_targets = data.get('targets', {})
+        _drugcentral_structures = data.get('structures', {})
+        print(f"[pharma_cache] DrugCentral 已从磁盘缓存加载: {len(_drugcentral_targets)} 靶点记录")
+        return True
+    except Exception as e:
+        print(f"[pharma_cache] 磁盘缓存读取失败: {e}")
+        return False
+
+
+def _save_drugcentral_to_disk():
+    """将 DrugCentral 数据保存到磁盘缓存"""
+    _ensure_cache_dir()
+    try:
+        with open(_DRUGCENTRAL_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({
+                'targets': _drugcentral_targets,
+                'structures': _drugcentral_structures,
+            }, f, ensure_ascii=False)
+        print(f"[pharma_cache] DrugCentral 已保存到磁盘缓存: {_DRUGCENTRAL_CACHE_FILE}")
+    except Exception as e:
+        print(f"[pharma_cache] 磁盘缓存保存失败: {e}")
     """标准化化合物名称用于匹配"""
     if not isinstance(name, str):
         return ''
@@ -44,12 +86,18 @@ def _normalize_name(name: str) -> str:
 def _load_drugcentral(force_download=False) -> bool:
     """
     加载 DrugCentral 数据到内存。
-    首次调用时自动下载（~800KB），之后直接返回缓存。
+    优先从磁盘缓存加载，缓存不存在时才下载。
+    缓存路径: .pharma_cache/drugcentral_data.json
     返回 True 表示加载成功，False 表示失败。
     """
     global _drugcentral_loaded, _drugcentral_targets, _drugcentral_structures
 
     if _drugcentral_loaded and not force_download:
+        return True
+
+    # 优先从磁盘缓存加载
+    if not force_download and _load_drugcentral_from_disk():
+        _drugcentral_loaded = True
         return True
 
     print("[pharma_cache] 首次使用，正在下载 DrugCentral 数据库（仅下载一次）...")
@@ -65,6 +113,9 @@ def _load_drugcentral(force_download=False) -> bool:
     structure_data = _download_with_retry(_DRUGCENTRAL_STRUCTURES_URL)
     if structure_data:
         _parse_structure_data(structure_data)
+
+    # 保存到磁盘缓存
+    _save_drugcentral_to_disk()
 
     _drugcentral_loaded = True
     print(f"[pharma_cache] DrugCentral 加载完成: {len(_drugcentral_targets)} 靶点记录, {len(_drugcentral_structures)} 结构记录")

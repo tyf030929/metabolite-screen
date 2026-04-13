@@ -6,6 +6,9 @@
 """
 
 import re
+import os
+import json
+import glob
 import time
 import requests
 import pandas as pd
@@ -23,7 +26,221 @@ PHARMA_SCORES = {
 }
 
 
-# ===================== TCMSP 文件加载 =====================
+# ===================== TCMSP 目录批量加载 =====================
+def load_tcmsp_from_dir(dir_path: str) -> dict:
+    """
+    从指定目录扫描并加载 TCMSP 数据文件。
+    支持的文件：
+      - tcmsp_ingredients.csv: 成分-靶点关联（SVM/RF 预测）
+      - tcmsp_targets.csv: 成分药代动力学属性（OB、DL、Caco2、BBB）
+      - tcmsp_diseases.csv: 靶点-疾病关联
+      - tcmsp_full.json: 完整 JSON 备份
+    返回 {compound_name_lower: {ob, dl, targets: [], diseases: [], svm_scores: []}}
+    """
+    import glob
+    result = {}  # {compound_name_lower: {ob, dl, targets, diseases, svm_scores}}
+
+    if not os.path.isdir(dir_path):
+        print(f"[pharma_db] TCMSP 目录不存在: {dir_path}")
+        return result
+
+    csv_files = glob.glob(os.path.join(dir_path, '*.csv'))
+
+    ingredients_data = {}  # {compound_name_lower: [target_names]}
+    targets_data = {}     # {compound_name_lower: {ob, dl, ...}}
+    diseases_data = {}    # {compound_name_lower: [disease_names]}
+
+    for fpath in csv_files:
+        fname = os.path.basename(fpath).lower()
+        try:
+            # 自动检测分隔符（CSV 可能用 , 或 \t）
+            with open(fpath, 'r', encoding='utf-8-sig') as f:
+                first_line = f.readline()
+            sep = '\t' if '\t' in first_line else ','
+
+            df = pd.read_csv(fpath, sep=sep, low_memory=False, encoding='utf-8-sig', on_bad_lines='skip')
+            df.columns = df.columns.str.strip()
+            col_lower = [c.lower() for c in df.columns]
+
+            # 判断文件类型（按文件名优先，其次按列特征）
+            fname_key = os.path.basename(fpath).lower()
+            if 'target' in fname_key and ('svm_score' in col_lower or 'rf_score' in col_lower):
+                # tcmsp_targets.csv: molecule_name + target_name + SVM/RF scores
+                mol_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'molecule_name'), None)
+                tgt_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'target_name'), None)
+                svm_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'svm_score'), None)
+                if mol_col and tgt_col:
+                    for _, row in df.iterrows():
+                        mol = str(row.get(mol_col, '')).strip()
+                        tgt = str(row.get(tgt_col, '')).strip()
+                        svm = row.get(svm_col, None) if svm_col else None
+                        if mol and mol not in ('-', '', 'nan', 'NaN'):
+                            key = normalize_name(mol)
+                            if key not in ingredients_data:
+                                ingredients_data[key] = {'targets': [], 'svm_scores': [], 'mol_name': mol}
+                            if tgt and tgt not in ('-', '', 'nan'):
+                                ingredients_data[key]['targets'].append(tgt)
+                            if svm is not None:
+                                try:
+                                    ingredients_data[key]['svm_scores'].append(float(svm))
+                                except (ValueError, TypeError):
+                                    pass
+
+            elif 'ingredient' in fname_key and ('ob' in col_lower or 'dl' in col_lower or 'bbb' in col_lower):
+                # tcmsp_ingredients.csv: molecule_name + OB, DL, BBB 等属性
+                mol_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'molecule_name'), None)
+                if mol_col is None:
+                    mol_col = next((df.columns[i] for i, c in enumerate(col_lower) if 'name' in c), df.columns[0])
+                ob_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'ob'), None)
+                dl_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'dl'), None)
+                bbb_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'bbb'), None)
+                caco_col = next((df.columns[i] for i, c in enumerate(col_lower) if 'caco' in c), None)
+                mw_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'mw'), None)
+
+                for _, row in df.iterrows():
+                    mol = str(row.get(mol_col, '')).strip()
+                    if mol and mol not in ('-', '', 'nan', 'NaN'):
+                        key = normalize_name(mol)
+                        ob = float(row[ob_col]) if ob_col and pd.notna(row.get(ob_col)) else None
+                        dl = float(row[dl_col]) if dl_col and pd.notna(row.get(dl_col)) else None
+                        bbb = float(row[bbb_col]) if bbb_col and pd.notna(row.get(bbb_col)) else None
+                        caco = float(row[caco_col]) if caco_col and pd.notna(row.get(caco_col)) else None
+                        mw = float(row[mw_col]) if mw_col and pd.notna(row.get(mw_col)) else None
+                        targets_data[key] = {'ob': ob, 'dl': dl, 'bbb': bbb, 'caco2': caco, 'mw': mw, 'mol_name': mol}
+
+            elif 'disease' in fname_key:
+                # tcmsp_diseases.csv: target_name + disease_name
+                tgt_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'target_name'), None)
+                dis_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'disease_name'), None)
+                if tgt_col and dis_col:
+                    for _, row in df.iterrows():
+                        tgt = str(row.get(tgt_col, '')).strip()
+                        dis = str(row.get(dis_col, '')).strip()
+                        if tgt and tgt not in ('-', '', 'nan', 'NaN'):
+                            key = normalize_name(tgt)
+                            if key not in diseases_data:
+                                diseases_data[key] = []
+                            if dis and dis not in ('-', '', 'nan'):
+                                diseases_data[key].append(dis)
+
+            else:
+                # fallback: 用列特征判断
+                if 'target_name' in col_lower and 'molecule_name' in col_lower:
+                    # 靶点预测文件
+                    mol_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'molecule_name'), None)
+                    tgt_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'target_name'), None)
+                    svm_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'svm_score'), None)
+                    if mol_col and tgt_col:
+                        for _, row in df.iterrows():
+                            mol = str(row.get(mol_col, '')).strip()
+                            tgt = str(row.get(tgt_col, '')).strip()
+                            svm = row.get(svm_col, None) if svm_col else None
+                            if mol and mol not in ('-', '', 'nan', 'NaN'):
+                                key = normalize_name(mol)
+                                if key not in ingredients_data:
+                                    ingredients_data[key] = {'targets': [], 'svm_scores': [], 'mol_name': mol}
+                                if tgt and tgt not in ('-', '', 'nan'):
+                                    ingredients_data[key]['targets'].append(tgt)
+                                if svm is not None:
+                                    try:
+                                        ingredients_data[key]['svm_scores'].append(float(svm))
+                                    except (ValueError, TypeError):
+                                        pass
+                elif 'ob' in col_lower or 'dl' in col_lower:
+                    # 属性文件
+                    mol_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'molecule_name'), None)
+                    if mol_col is None:
+                        mol_col = df.columns[0]
+                    ob_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'ob'), None)
+                    dl_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'dl'), None)
+                    bbb_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'bbb'), None)
+                    for _, row in df.iterrows():
+                        mol = str(row.get(mol_col, '')).strip()
+                        if mol and mol not in ('-', '', 'nan', 'NaN'):
+                            key = normalize_name(mol)
+                            ob = float(row[ob_col]) if ob_col and pd.notna(row.get(ob_col)) else None
+                            dl = float(row[dl_col]) if dl_col and pd.notna(row.get(dl_col)) else None
+                            bbb = float(row[bbb_col]) if bbb_col and pd.notna(row.get(bbb_col)) else None
+                            targets_data[key] = {'ob': ob, 'dl': dl, 'bbb': bbb, 'caco2': None, 'mw': None, 'mol_name': mol}
+                elif 'disease_name' in col_lower:
+                    tgt_col = next((df.columns[i] for i, c in enumerate(col_lower) if c == 'target_name'), None)
+                    dis_col = 'disease_name'
+                    if tgt_col:
+                        for _, row in df.iterrows():
+                            tgt = str(row.get(tgt_col, '')).strip()
+                            dis = str(row.get(dis_col, '')).strip()
+                            if tgt and tgt not in ('-', '', 'nan', 'NaN'):
+                                key = normalize_name(tgt)
+                                if key not in diseases_data:
+                                    diseases_data[key] = []
+                                if dis and dis not in ('-', '', 'nan'):
+                                    diseases_data[key].append(dis)
+
+        except Exception as e:
+            print(f"[pharma_db] 解析 TCMSP 文件失败 {fpath}: {e}")
+
+    # 也尝试加载 JSON 备份
+    json_path = os.path.join(dir_path, 'tcmsp_full.json')
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                json_data = json.load(f)
+            if isinstance(json_data, dict):
+                for key, val in json_data.items():
+                    if key not in result:
+                        result[key] = {'ob': None, 'dl': None, 'targets': [], 'diseases': [], 'svm_scores': []}
+                    if isinstance(val, dict):
+                        result[key].setdefault('ob', val.get('ob'))
+                        result[key].setdefault('dl', val.get('dl'))
+        except Exception as e:
+            print(f"[pharma_db] 解析 tcmsp_full.json 失败: {e}")
+
+    # 合并数据
+    # 先用 targets_data 初始化所有化合物
+    for key, attrs in targets_data.items():
+        result[key] = {
+            'ob': attrs.get('ob'),
+            'dl': attrs.get('dl'),
+            'bbb': attrs.get('bbb'),
+            'caco2': attrs.get('caco2'),
+            'mw': attrs.get('mw'),
+            'targets': [],
+            'diseases': [],
+            'svm_scores': [],
+            'mol_name': attrs.get('mol_name', ''),
+        }
+
+    # 合并 ingredients（靶点和 SVM 评分）
+    for key, ing_info in ingredients_data.items():
+        if key not in result:
+            result[key] = {'ob': None, 'dl': None, 'bbb': None, 'caco2': None, 'mw': None,
+                           'targets': [], 'diseases': [], 'svm_scores': [], 'mol_name': ing_info.get('mol_name', '')}
+        result[key]['targets'].extend(ing_info.get('targets', []))
+        result[key]['svm_scores'].extend(ing_info.get('svm_scores', []))
+        # 去重
+        result[key]['targets'] = list(set(result[key]['targets']))
+        result[key]['svm_scores'] = list(set(result[key]['svm_scores']))
+
+    # 合并 diseases（需要通过靶点名称关联到成分）
+    # 已知成分的靶点，去重后添加疾病
+    for key, compound_info in result.items():
+        all_diseases = set()
+        for tgt in compound_info.get('targets', []):
+            tgt_key = normalize_name(tgt)
+            if tgt_key in diseases_data:
+                all_diseases.update(diseases_data[tgt_key])
+        result[key]['diseases'] = list(all_diseases)
+
+    # 去重所有 targets
+    for key in result:
+        if result[key].get('targets'):
+            result[key]['targets'] = list(set(result[key]['targets']))
+
+    print(f"[pharma_db] TCMSP 目录加载完成: {len(result)} 化合物, {sum(len(v['targets']) for v in result.values())} 靶点关联")
+    return result
+
+
+# ===================== TCMSP 文件加载（单文件上传方式，保持兼容）=====================
 def load_tcmsp(uploaded_file) -> dict:
     """
     加载 TCMSP Excel 文件，返回 {compound_name: {ob, dl, bbb, ...}}
@@ -390,6 +607,9 @@ def match_pharma_db(
             'Metabolite': metab,
             'TCMSP_OB': ev['details'].get('tcmsp', {}).get('ob'),
             'TCMSP_DL': ev['details'].get('tcmsp', {}).get('dl'),
+            'TCMSP_Targets': '; '.join(tcmsp_info.get('targets', [])[:10]) if tcmsp_info.get('targets') else '-',
+            'TCMSP_Diseases': '; '.join(tcmsp_info.get('diseases', [])[:5]) if tcmsp_info.get('diseases') else '-',
+            'TCMSP_SVM_Score': max(tcmsp_info.get('svm_scores', []) or [0]),
             'DrugBank_Targets': ev['details'].get('drugbank', {}).get('targets', '-'),
             'DrugBank_Indications': ev['details'].get('drugbank', {}).get('indications', '-'),
             'TTD_Targets': ev['details'].get('ttd', {}).get('targets', '-'),
