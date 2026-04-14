@@ -808,7 +808,7 @@ def main():
         help="只保留 P_value < 此值的差异代谢物"
     )
 
-    run_analysis = st.sidebar.button("Start Analysis", type="primary", use_container_width=True)
+    run_analysis = st.sidebar.button("Start Analysis", type="primary", width="stretch")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown(
@@ -932,7 +932,7 @@ def main():
                 data=bytes1,
                 file_name="total_differential_metabolites.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
             col_dl1.caption(f"{len(diff_out)} rows")
 
@@ -952,7 +952,7 @@ def main():
                 data=bytes2,
                 file_name="pharmacological_candidates.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
             col_dl2.caption(f"{len(pharma_out)} rows")
 
@@ -963,7 +963,7 @@ def main():
                 data=bytes3,
                 file_name="five_species_abundance.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
             col_dl3.caption(f"{len(st.session_state['abundance_df'])} rows")
 
@@ -972,7 +972,7 @@ def main():
             # ===== Word 报告下载 =====
             if generate_word_report is not None:
                 st.subheader("Download Analysis Report")
-                if st.button("Generate Word Report", type="secondary", use_container_width=True):
+                if st.button("Generate Word Report", type="secondary", width="stretch"):
                     with st.spinner("Generating Word report..."):
                         try:
                             fig_hm_bytes = None
@@ -1025,7 +1025,7 @@ def main():
                             data=doc_bytes,
                             file_name=f"metabolite_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M')}.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
+                            width="stretch",
                         )
             else:
                 st.caption("Note: python-docx not installed. Run: pip install python-docx")
@@ -1036,7 +1036,7 @@ def main():
             display_cols = [c for c in display_cols if c in st.session_state['pharma_df'].columns]
             st.dataframe(
                 st.session_state['pharma_df'][display_cols].head(30),
-                use_container_width=True,
+                width="stretch",
                 height=400,
             )
 
@@ -1061,7 +1061,7 @@ def main():
                         data=buf_fig,
                         file_name="heatmap.png",
                         mime="image/png",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 else:
                     st.warning("Insufficient data for heatmap.")
@@ -1072,7 +1072,7 @@ def main():
                 bx_top_n = st.slider("Select Top N compounds for boxplot:", 5, 50, 15, 5, key="bx_top")
                 fig_bx = plot_boxplot(st.session_state['abundance_df'], st.session_state['pharma_df'], top_n=bx_top_n)
                 if fig_bx:
-                    st.plotly_chart(fig_bx, use_container_width=True)
+                    st.plotly_chart(fig_bx, width="stretch")
                 else:
                     st.warning("Insufficient data for boxplot.")
 
@@ -1091,7 +1091,7 @@ def main():
             fig_vip.add_vline(x=vip_thresh, line_dash='dash', line_color='red',
                               annotation_text=f'VIP threshold={vip_thresh}')
             fig_vip.update_layout(height=400)
-            st.plotly_chart(fig_vip, use_container_width=True)
+            st.plotly_chart(fig_vip, width="stretch")
 
         # ---------- Tab 3: 明星分子精选 ----------
         with tab3:
@@ -1205,7 +1205,7 @@ def main():
                     'EH_mean_abundance': '{:.4f}',
                     'MB_mean_abundance': '{:.4f}',
                 }, na_rep='-'),
-                use_container_width=True,
+                width="stretch",
                 height=500,
             )
 
@@ -1216,7 +1216,7 @@ def main():
                 data=bytes_star,
                 file_name="star_molecules.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
 
         # ---------- Tab 4: KEGG 通路富集 ----------
@@ -1231,7 +1231,7 @@ def main():
                 "下方表格中点击 KEGG ID 可跳转到 KEGG Mapper 进行通路可视化。"
             )
 
-            if st.button("Run Pathway Enrichment", type="primary", use_container_width=True):
+            if st.button("Run Pathway Enrichment", type="primary", width="stretch"):
                 pharma_df = st.session_state['pharma_df']
                 annotated_df = st.session_state['annotated_df']
 
@@ -1341,7 +1341,7 @@ def main():
                     )
                     fig_bubble.update_layout(height=max(400, len(plot_df) * 18))
                     fig_bubble.update_yaxes(tickfont=dict(size=9))
-                    st.plotly_chart(fig_bubble, use_container_width=True)
+                    st.plotly_chart(fig_bubble, width="stretch")
 
                     # ---- 柱状图（按富集数排序）----
                     st.markdown("**Top Pathways by Hit Count**")
@@ -1367,7 +1367,7 @@ def main():
                     )
                     fig_bar.update_layout(height=max(400, len(bar_df) * 18), yaxis={'autorange': 'reversed'})
                     fig_bar.update_yaxes(tickfont=dict(size=9))
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, width="stretch")
 
                     # ---- 结果表格 ----
                     st.markdown("**Full Enrichment Results (sorted by P-value)**")
@@ -1379,7 +1379,7 @@ def main():
                             'P_value': '{:.2e}',
                             'P_value_BH': '{:.2e}',
                         }, na_rep='-'),
-                        use_container_width=True,
+                        width="stretch",
                         height=400,
                     )
 
@@ -1431,7 +1431,7 @@ def main():
                         data=bytes_enr,
                         file_name="pathway_enrichment_results.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
+                        width="stretch",
                     )
                 else:
                     st.warning(
@@ -1470,7 +1470,7 @@ def main():
                         text='Pathway_Name',
                     )
                     fig_dist.update_layout(height=450, xaxis={'tickangle': 45})
-                    st.plotly_chart(fig_dist, use_container_width=True)
+                    st.plotly_chart(fig_dist, width="stretch")
                 else:
                     st.info("No KEGG pathway IDs found in pharmacological candidates.")
 
@@ -1503,7 +1503,7 @@ def main():
                 online_query_btn = st.button(
                     "Start Online Pharma Query (Auto-Download)",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     help="首次运行时会自动下载 DrugCentral 数据库（约 1-2 分钟），之后直接使用缓存"
                 )
 
@@ -1570,6 +1570,12 @@ def main():
                         help="填入 TCMSP 数据文件所在目录，程序将自动扫描并加载所有 CSV 文件（tcmsp_ingredients.csv, tcmsp_targets.csv, tcmsp_diseases.csv）"
                     ).strip()
 
+                    tcmsp_file = st.file_uploader(
+                        "TCMSP 文件",
+                        type=['xlsx', 'xls', 'csv'],
+                        help="TCMSP 单文件模式（与目录路径二选一）"
+                    )
+
                     # DrugBank / TTD 文件上传仍用单文件方式
                     db_col1, db_col2 = st.columns(2)
                     with db_col1:
@@ -1587,7 +1593,7 @@ def main():
 
                     local_query_btn = st.button(
                         "Run Local DB Query",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                     if local_query_btn:
@@ -1681,7 +1687,7 @@ def main():
                             color_discrete_sequence=['#2ECC71'],
                         )
                         fig_ev.update_layout(height=350)
-                        st.plotly_chart(fig_ev, use_container_width=True)
+                        st.plotly_chart(fig_ev, width="stretch")
 
                         # 结果表格
                         st.markdown("**Full Match Results**")
@@ -1699,7 +1705,7 @@ def main():
                                 'PubChem_BioActivity_Count': lambda x: int(x) if pd.notna(x) else 0,
                                 'Pharma_Evidence_Score': '{:.2f}',
                             }, na_rep='-'),
-                            use_container_width=True, height=500,
+                            width="stretch", height=500,
                         )
                     else:
                         # 本地文件结果展示（原逻辑）
@@ -1721,7 +1727,7 @@ def main():
                             color_discrete_sequence=['#2ECC71'],
                         )
                         fig_ev.update_layout(height=350)
-                        st.plotly_chart(fig_ev, use_container_width=True)
+                        st.plotly_chart(fig_ev, width="stretch")
 
                         st.markdown("**Full Match Results**")
                         display_cols = [
@@ -1738,7 +1744,7 @@ def main():
                                 'TCMSP_DL': lambda x: f'{x:.3f}' if pd.notna(x) else '-',
                                 'Pharma_Evidence_Score': '{:.2f}',
                             }, na_rep='-'),
-                            use_container_width=True, height=500,
+                            width="stretch", height=500,
                         )
 
                     # 下载匹配结果
@@ -1751,7 +1757,7 @@ def main():
                         data=match_bytes.getvalue(),
                         file_name="pharma_database_match.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
+                        width="stretch",
                     )
     else:
         # 未运行分析时显示说明
