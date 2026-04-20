@@ -406,142 +406,372 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ====================== MiniMax风格美化CSS ======================
+# ====================== Aura Scientific 设计系统 CSS ======================
+# 参考：stitch_high_end_website_prototype - "The Ethereal Laboratory" 设计语言
+# 核心原则：无线条分隔、大圆角、薰衣草白底、紫色品牌、Inter字体
 st.markdown("""
 <style>
-    /* 整体背景 */
-    .stApp {
-        background-color: #f9fafb;
-    }
+/* ====== 基础重置 & 全局字体 ====== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
 
-    /* 侧边栏 */
-    [data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e5e7eb;
-    }
+html, body, [class*="css-"] {
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, sans-serif !important;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+}
 
-    /* 主内容区标题 */
-    h1, h2, h3 {
-        color: #111827;
-        font-family: 'Microsoft YaHei', 'SimHei', sans-serif;
-    }
+/* 标题负字距 */
+h1, h2, h3, h4 {
+    letter-spacing: -0.02em !important;
+}
 
-    /* Tab样式 */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 6px;
-        background-color: #f3f4f6;
-        border-radius: 12px;
-        padding: 4px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        font-weight: 500;
-        color: #6b7280;
-        font-size: 13px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #ffffff !important;
-        color: #7C3AED !important;
-        font-weight: 600;
-        box-shadow: 0 2px 8px rgba(124, 58, 237, 0.15);
-    }
+/* ====== 整体背景 - 薰衣草白 ====== */
+.stApp {
+    background-color: #fef7ff !important;
+}
 
-    /* primary按钮 - 紫色胶囊 */
-    .stButton > button[kind="primary"],
-    div[data-testid="stMainBlockContainer"] button[kind="primary"] {
-        background-color: #7C3AED;
-        color: white;
-        border: none;
-        border-radius: 9999px;
-        padding: 0.4rem 1.4rem;
-        font-weight: 600;
-        box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
-    }
-    .stButton > button[kind="primary"]:hover {
-        background-color: #6d28d9;
-        box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4);
-        transform: translateY(-1px);
-    }
+/* ====== 侧边栏 - 薰衣草分层 ====== */
+[data-testid="stSidebar"] {
+    background-color: #f3ebfa !important;
+    border-right: none !important;
+    /* 无线条，用背景色差区分 */
+}
 
-    /* 普通按钮 */
-    .stButton > button {
-        border-radius: 10px;
-        font-weight: 500;
-        transition: all 0.2s;
-    }
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] .stMarkdown {
+    color: #1d1a24 !important;
+}
 
-    /* 下载按钮 */
-    .stDownloadButton > button {
-        border-radius: 9999px;
-        border: 1.5px solid #7C3AED;
-        color: #7C3AED;
-        background: #ffffff;
-        font-weight: 600;
-    }
-    .stDownloadButton > button:hover {
-        background-color: #f5f3ff;
-        border-color: #6d28d9;
-    }
+/* 侧边栏标题 - 品牌紫色 */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+[data-testid="stSidebar"] .stTitle {
+    color: #630ed4 !important;
+    font-weight: 700 !important;
+    font-size: 18px !important;
+}
 
-    /* Metric数字 */
-    [data-testid="stMetricValue"] {
-        color: #7C3AED;
-        font-weight: 700;
-    }
+/* ====== 品牌头部横幅 ====== */
+[data-testid="stMainBlockContainer"] > div:first-child {
+    border-radius: 1.5rem !important;
+}
 
-    /* Dataframe表头 */
-    .stDataFrame thead th {
-        background-color: #f9fafb;
-        color: #4B5563;
-        font-weight: 600;
-        border-bottom: 2px solid #e5e7eb;
-        font-size: 13px;
-    }
+/* ====== Tab 标签 - 胶囊式 ====== */
+.stTabs [data-baseweb="tab-list"] {
+    background-color: #f3ebfa !important;
+    border-radius: 1.5rem !important;
+    padding: 6px !important;
+    gap: 4px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
 
-    /* 分隔线 */
-    hr {
-        border: none;
-        border-top: 1px solid #e5e7eb;
-        margin: 1.5rem 0;
-    }
+.stTabs [data-baseweb="tab"] {
+    border-radius: 1rem !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    color: #4a4455 !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 8px 16px !important;
+    transition: all 0.2s ease !important;
+}
 
-    /* 展开面板 */
-    details {
-        background-color: #ffffff;
-        border-radius: 12px;
-        border: 1px solid #e5e7eb;
-    }
+.stTabs [data-baseweb="tab"]:hover {
+    background-color: rgba(99, 14, 212, 0.08) !important;
+    color: #630ed4 !important;
+}
 
-    /* 成功/信息提示 */
-    .stAlert {
-        border-radius: 12px;
-        border: none;
-    }
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, #630ed4 0%, #7c3aed 100%) !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    box-shadow: 0 4px 20px rgba(99, 14, 212, 0.35) !important;
+}
 
-    /* 侧边栏 selectbox / select */
-    .stSelectbox > label, .stMultiSelect > label {
-        color: #374151;
-        font-weight: 600;
-        font-size: 12px;
-        letter-spacing: 0.02em;
-    }
+/* ====== 主按钮 - 紫色渐变胶囊 ====== */
+.stButton > button[kind="primary"],
+div[data-testid="stMainBlockContainer"] button[kind="primary"] {
+    background: linear-gradient(135deg, #630ed4 0%, #7c3aed 100%) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 9999px !important;
+    padding: 0.55rem 1.8rem !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
+    letter-spacing: 0 !important;
+    box-shadow: 0 4px 20px rgba(99, 14, 212, 0.35) !important;
+    transition: all 0.2s ease !important;
+}
 
-    /* 数字输入框 */
-    .stNumberInput > label {
-        color: #374151;
-        font-weight: 600;
-        font-size: 12px;
-    }
+.stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #5509c6 0%, #6d28d9 100%) !important;
+    box-shadow: 0 6px 28px rgba(99, 14, 212, 0.45) !important;
+    transform: translateY(-1px) !important;
+}
 
-    /* 进度条 / spinner */
-    .stSpinner > div {
-        border-color: #7C3AED;
-    }
+.stButton > button[kind="primary"]:active {
+    transform: translateY(0px) scale(0.98) !important;
+}
 
-    /* 全局字体 */
-    html, body, [class*="css-"] {
-        font-family: 'Microsoft YaHei', 'SimHei', -apple-system, sans-serif;
-    }
+/* ====== 普通按钮 ====== */
+.stButton > button {
+    border-radius: 1rem !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    border: none !important;
+    background-color: #f3ebfa !important;
+    color: #1d1a24 !important;
+    padding: 0.5rem 1.2rem !important;
+    transition: all 0.2s ease !important;
+    box-shadow: none !important;
+}
+
+.stButton > button:hover {
+    background-color: #ede5f4 !important;
+    box-shadow: 0 2px 12px rgba(99, 14, 212, 0.15) !important;
+}
+
+/* ====== 下载按钮 ====== */
+.stDownloadButton > button {
+    border-radius: 9999px !important;
+    border: none !important;
+    background: linear-gradient(135deg, #630ed4 0%, #7c3aed 100%) !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    padding: 0.5rem 1.5rem !important;
+    box-shadow: 0 4px 16px rgba(99, 14, 212, 0.3) !important;
+}
+
+.stDownloadButton > button:hover {
+    box-shadow: 0 6px 24px rgba(99, 14, 212, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ====== Metric 数字 ====== */
+[data-testid="stMetricValue"] {
+    color: #630ed4 !important;
+    font-weight: 700 !important;
+    font-size: 28px !important;
+    letter-spacing: -0.03em !important;
+}
+
+[data-testid="stMetricLabel"] {
+    color: #4a4455 !important;
+    font-weight: 500 !important;
+    font-size: 12px !important;
+    letter-spacing: 0.01em !important;
+}
+
+/* ====== DataFrame 表格 ====== */
+.stDataFrame {
+    border-radius: 1.5rem !important;
+    overflow: hidden !important;
+    border: none !important;
+    box-shadow: 0 2px 16px rgba(99, 14, 212, 0.08) !important;
+}
+
+.stDataFrame thead th {
+    background-color: #f3ebfa !important;
+    color: #4a4455 !important;
+    font-weight: 600 !important;
+    font-size: 11px !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    border-bottom: none !important;
+    padding: 12px 16px !important;
+}
+
+.stDataFrame tbody tr {
+    background-color: #ffffff !important;
+    transition: background-color 0.15s ease !important;
+}
+
+.stDataFrame tbody tr:hover {
+    background-color: #f9f1ff !important;
+}
+
+.stDataFrame tbody td {
+    color: #1d1a24 !important;
+    font-size: 13px !important;
+    padding: 10px 16px !important;
+    border-bottom: 1px solid #f3ebfa !important;
+}
+
+/* ====== 分隔线 - 禁用，改用空白间距 ====== */
+hr {
+    border: none !important;
+    margin: 0 !important;
+}
+
+/* ====== 展开面板 - 圆角卡片 ====== */
+details {
+    background-color: #ffffff !important;
+    border-radius: 1.5rem !important;
+    border: none !important;
+    box-shadow: 0 2px 16px rgba(99, 14, 212, 0.07) !important;
+    overflow: hidden !important;
+}
+
+details summary {
+    background-color: #f3ebfa !important;
+    color: #1d1a24 !important;
+    font-weight: 600 !important;
+    border-radius: 1.5rem !important;
+    padding: 12px 20px !important;
+}
+
+details[open] summary {
+    border-radius: 1.5rem 1.5rem 0 0 !important;
+}
+
+/* ====== 提示框 Alert ====== */
+.stAlert {
+    border-radius: 1.5rem !important;
+    border: none !important;
+    box-shadow: 0 2px 16px rgba(99, 14, 212, 0.08) !important;
+}
+
+/* success */
+.stAlert[data-baseweb="notification"]:has([data-testid="stAlertSuccess"]) {
+    background-color: #f0fdf4 !important;
+}
+
+/* error */
+.stAlert[data-baseweb="notification"]:has([data-testid="stAlertError"]) {
+    background-color: #fff1f2 !important;
+}
+
+/* ====== Selectbox / Multiselect ====== */
+.stSelectbox [data-baseweb="select"] > div,
+.stMultiSelect [data-baseweb="select"] > div {
+    background-color: #ffffff !important;
+    border: none !important;
+    border-radius: 1rem !important;
+    box-shadow: 0 1px 8px rgba(99, 14, 212, 0.1) !important;
+}
+
+.stSelectbox label,
+.stMultiSelect label {
+    color: #4a4455 !important;
+    font-weight: 600 !important;
+    font-size: 11px !important;
+    letter-spacing: 0.05em !important;
+    text-transform: uppercase !important;
+}
+
+/* ====== Slider ====== */
+.stSlider [data-baseweb="slider"] .MuiSlider-track {
+    background: linear-gradient(90deg, #630ed4, #7c3aed) !important;
+    border: none !important;
+}
+
+.stSlider [data-baseweb="slider"] .MuiSlider-thumb {
+    background-color: #630ed4 !important;
+    box-shadow: 0 2px 8px rgba(99, 14, 212, 0.4) !important;
+}
+
+.stSlider [data-baseweb="slider"] .MuiSlider-rail {
+    background-color: #e8dfee !important;
+}
+
+/* ====== Text Input / Text Area ====== */
+.stTextInput input,
+.stTextArea textarea {
+    background-color: #ffffff !important;
+    border: none !important;
+    border-radius: 1rem !important;
+    box-shadow: 0 1px 8px rgba(99, 14, 212, 0.1) !important;
+    font-size: 13px !important;
+    color: #1d1a24 !important;
+}
+
+.stTextInput input:focus,
+.stTextArea textarea:focus {
+    outline: 2px solid #7c3aed !important;
+    outline-offset: 0 !important;
+    box-shadow: 0 2px 12px rgba(99, 14, 212, 0.2) !important;
+}
+
+/* ====== Number Input ====== */
+.stNumberInput input {
+    background-color: #ffffff !important;
+    border: none !important;
+    border-radius: 1rem !important;
+    box-shadow: 0 1px 8px rgba(99, 14, 212, 0.1) !important;
+}
+
+.stNumberInput input:focus {
+    outline: 2px solid #7c3aed !important;
+    box-shadow: 0 2px 12px rgba(99, 14, 212, 0.2) !important;
+}
+
+/* ====== Spinner ====== */
+.stSpinner > div {
+    border-color: rgba(99, 14, 212, 0.2) !important;
+    border-top-color: #630ed4 !important;
+}
+
+/* ====== Progress Bar ====== */
+.stProgress > div > div > div {
+    background: linear-gradient(90deg, #630ed4, #7c3aed) !important;
+    border-radius: 9999px !important;
+}
+
+/* ====== Container 卡片 ====== */
+[data-testid="stVerticalBlock"] > div:has(> .stCard),
+.element-container > div > .stCard {
+    background-color: #ffffff !important;
+    border-radius: 1.5rem !important;
+    border: none !important;
+    box-shadow: 0 2px 16px rgba(99, 14, 212, 0.07) !important;
+    padding: 20px !important;
+}
+
+/* ====== 图表 matplotlib figure ====== */
+[data-testid="stImage"] figure {
+    border-radius: 1.5rem !important;
+    overflow: hidden !important;
+    box-shadow: 0 4px 24px rgba(99, 14, 212, 0.1) !important;
+}
+
+/* ====== Plotly chart container ====== */
+.js-plotly-plot .plotly .modebar {
+    background: rgba(254, 247, 255, 0.9) !important;
+    border-radius: 1rem !important;
+}
+
+/* ====== Expander / Details 内容区 ====== */
+details > div {
+    background-color: #ffffff !important;
+    padding: 16px 20px !important;
+}
+
+/* ====== 表头分隔 - 改用留白而非线条 ====== */
+.stDataFrame thead th:first-child {
+    border-radius: 1.5rem 0 0 0 !important;
+}
+.stDataFrame thead th:last-child {
+    border-radius: 0 1.5rem 0 0 !important;
+}
+
+/* ====== 隐藏滚动条但保持功能 ====== */
+[data-testid="stVerticalBlock"] {
+    scrollbar-width: thin;
+    scrollbar-color: #e8dfee transparent;
+}
+
+/* ====== Purple Tint 大面积装饰（低透明度）====== */
+.stMain > div:first-child {
+    background: linear-gradient(to bottom, rgba(99, 14, 212, 0.02) 0%, transparent 300px) !important;
+}
+
+/* ====== 品牌横幅 HTML 样式覆盖 ====== */
+[data-testid="stMarkdownContainer"] h1 {
+    color: #ffffff !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -936,34 +1166,29 @@ def plot_radar(pharma_row: dict, abundance_row: dict) -> go.Figure:
 def main():
     # ===== 品牌头部横幅 =====
     st.markdown("""
-    <div style="background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #C4B5FD 100%);
-                padding: 22px 28px; border-radius: 16px; margin-bottom: 20px;
-                box-shadow: 0 4px 16px rgba(124, 58, 237, 0.25);">
-        <div style="display: flex; align-items: center; gap: 12px;">
-            <div style="font-size: 32px;">🧬</div>
-            <div>
-                <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em;">
-                    差异代谢物药用筛选平台
-                </h1>
-                <p style="color: rgba(255,255,255,0.88); margin: 4px 0 0 0; font-size: 13px;">
-                    多元统计 · 火山图 · KEGG富集 · 网络药理 · 系统性分析
-                </p>
+    <div style="background: linear-gradient(135deg, #630ed4 0%, #7c3aed 50%, #9f67f5 100%);
+                padding: 24px 32px; border-radius: 1.5rem; margin-bottom: 24px;
+                box-shadow: 0 8px 32px rgba(99, 14, 212, 0.3);">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="font-size: 36px; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.2));">🧬</div>
+                <div>
+                    <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.03em; text-shadow: 0 1px 4px rgba(0,0,0,0.15);">
+                        差异代谢物药用筛选平台
+                    </h1>
+                    <p style="color: rgba(255,255,255,0.82); margin: 6px 0 0 0; font-size: 13px; letter-spacing: 0.01em;">
+                        Multivariate Stats · Volcano Plot · KEGG Enrichment · Network Pharmacology
+                    </p>
+                </div>
+            </div>
+            <div style="background: rgba(255,255,255,0.15); border-radius: 1rem; padding: 8px 16px; backdrop-filter: blur(8px);">
+                <span style="color: rgba(255,255,255,0.9); font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;">MetaboLab</span>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     # ===== 侧边栏 =====
-    st.sidebar.markdown("""
-    <style>
-        [data-testid="stSidebar"] h1 {
-            color: #7C3AED;
-            font-weight: 700;
-            font-size: 18px;
-            padding-top: 8px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
     st.sidebar.title("Config")
     st.sidebar.markdown("---")
 
