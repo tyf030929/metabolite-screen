@@ -406,6 +406,145 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ====================== MiniMax风格美化CSS ======================
+st.markdown("""
+<style>
+    /* 整体背景 */
+    .stApp {
+        background-color: #f9fafb;
+    }
+
+    /* 侧边栏 */
+    [data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e5e7eb;
+    }
+
+    /* 主内容区标题 */
+    h1, h2, h3 {
+        color: #111827;
+        font-family: 'Microsoft YaHei', 'SimHei', sans-serif;
+    }
+
+    /* Tab样式 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 6px;
+        background-color: #f3f4f6;
+        border-radius: 12px;
+        padding: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px;
+        font-weight: 500;
+        color: #6b7280;
+        font-size: 13px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff !important;
+        color: #7C3AED !important;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(124, 58, 237, 0.15);
+    }
+
+    /* primary按钮 - 紫色胶囊 */
+    .stButton > button[kind="primary"],
+    div[data-testid="stMainBlockContainer"] button[kind="primary"] {
+        background-color: #7C3AED;
+        color: white;
+        border: none;
+        border-radius: 9999px;
+        padding: 0.4rem 1.4rem;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+    }
+    .stButton > button[kind="primary"]:hover {
+        background-color: #6d28d9;
+        box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4);
+        transform: translateY(-1px);
+    }
+
+    /* 普通按钮 */
+    .stButton > button {
+        border-radius: 10px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    /* 下载按钮 */
+    .stDownloadButton > button {
+        border-radius: 9999px;
+        border: 1.5px solid #7C3AED;
+        color: #7C3AED;
+        background: #ffffff;
+        font-weight: 600;
+    }
+    .stDownloadButton > button:hover {
+        background-color: #f5f3ff;
+        border-color: #6d28d9;
+    }
+
+    /* Metric数字 */
+    [data-testid="stMetricValue"] {
+        color: #7C3AED;
+        font-weight: 700;
+    }
+
+    /* Dataframe表头 */
+    .stDataFrame thead th {
+        background-color: #f9fafb;
+        color: #4B5563;
+        font-weight: 600;
+        border-bottom: 2px solid #e5e7eb;
+        font-size: 13px;
+    }
+
+    /* 分隔线 */
+    hr {
+        border: none;
+        border-top: 1px solid #e5e7eb;
+        margin: 1.5rem 0;
+    }
+
+    /* 展开面板 */
+    details {
+        background-color: #ffffff;
+        border-radius: 12px;
+        border: 1px solid #e5e7eb;
+    }
+
+    /* 成功/信息提示 */
+    .stAlert {
+        border-radius: 12px;
+        border: none;
+    }
+
+    /* 侧边栏 selectbox / select */
+    .stSelectbox > label, .stMultiSelect > label {
+        color: #374151;
+        font-weight: 600;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+    }
+
+    /* 数字输入框 */
+    .stNumberInput > label {
+        color: #374151;
+        font-weight: 600;
+        font-size: 12px;
+    }
+
+    /* 进度条 / spinner */
+    .stSpinner > div {
+        border-color: #7C3AED;
+    }
+
+    /* 全局字体 */
+    html, body, [class*="css-"] {
+        font-family: 'Microsoft YaHei', 'SimHei', -apple-system, sans-serif;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # 中文字体支持
 plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Micro Hei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
@@ -795,7 +934,36 @@ def plot_radar(pharma_row: dict, abundance_row: dict) -> go.Figure:
 # ====================== Streamlit UI ======================
 
 def main():
+    # ===== 品牌头部横幅 =====
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #C4B5FD 100%);
+                padding: 22px 28px; border-radius: 16px; margin-bottom: 20px;
+                box-shadow: 0 4px 16px rgba(124, 58, 237, 0.25);">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="font-size: 32px;">🧬</div>
+            <div>
+                <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em;">
+                    差异代谢物药用筛选平台
+                </h1>
+                <p style="color: rgba(255,255,255,0.88); margin: 4px 0 0 0; font-size: 13px;">
+                    多元统计 · 火山图 · KEGG富集 · 网络药理 · 系统性分析
+                </p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # ===== 侧边栏 =====
+    st.sidebar.markdown("""
+    <style>
+        [data-testid="stSidebar"] h1 {
+            color: #7C3AED;
+            font-weight: 700;
+            font-size: 18px;
+            padding-top: 8px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
     st.sidebar.title("Config")
     st.sidebar.markdown("---")
 

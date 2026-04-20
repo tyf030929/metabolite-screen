@@ -585,10 +585,15 @@ def plot_multi_group_heatmap(diff_df, groups_dict, top_n=50, cluster_method='war
         color_continuous_scale='RdBu_r',
         title=f'Clustered Heatmap (Top {min(top_n, len(z_data))} Metabolites, Z-score)',
         labels=dict(x='Sample', y='Metabolite', color='Z-score'),
-        height=max(400, len(z_data) * 8),
-        width=900
+        height=max(600, len(z_data) * 22),
+        width=max(900, len(z_data.columns) * 28)
     )
-    fig.update_layout(xaxis={'tickangle': 45}, font=dict(size=9))
+    fig.update_layout(
+        xaxis={'tickangle': 45, 'side': 'bottom'},
+        yaxis={'tickfont': {'size': 9}},
+        font=dict(size=10),
+        margin=dict(l=200, r=40, t=60, b=120)
+    )
     return fig
 
 
