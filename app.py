@@ -38,6 +38,23 @@ try:
     from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online
 except ImportError:
     match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = None
+
+try:
+    from multivariate_stats import (
+        detect_species_columns_from_diff, build_abundance_matrix, compute_log2fc,
+        run_pca, run_plsda, run_oplsda, permutation_test_plsda,
+        plot_scores_scatter, plot_loading_scatter, plot_permutation,
+        plot_volcano, plot_diff_bar,
+        run_anova_kruskal, plot_multi_group_heatmap, plot_multi_group_boxplot,
+        GROUP_COLORS, VOLCANO_COLORS,
+    )
+except ImportError:
+    detect_species_columns_from_diff = build_abundance_matrix = compute_log2fc = None
+    run_pca = run_plsda = run_oplsda = permutation_test_plsda = None
+    plot_scores_scatter = plot_loading_scatter = plot_permutation = None
+    plot_volcano = plot_diff_bar = None
+    run_anova_kruskal = plot_multi_group_heatmap = plot_multi_group_boxplot = None
+    GROUP_COLORS = VOLCANO_COLORS = None
 import streamlit as st
 from scipy import stats
 import matplotlib
@@ -893,12 +910,15 @@ def main():
     # ===== 主区域：分析结果展示 =====
     if st.session_state['analysis_done']:
         # ===== 标签页 =====
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
             "📊 Data Overview & Downloads",
             "📈 Visualization",
             "⭐ Star Molecules",
             "🧬 KEGG Enrichment",
             "💊 Pharma DB",
+            "🧮 Multivariate Stats",
+            "🔥 Two-Group Comparison",
+            "📊 Multi-Group Comparison",
         ])
 
         # ---------- Tab 1: 数据概览 + 下载 ----------
@@ -1759,6 +1779,597 @@ def main():
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         width="stretch",
                     )
+
+        # ---------- Tab 6: 多元统计分析 ----------
+        with tab6:
+            st.subheader("Multivariate Statistical Analysis (PCA / PLS-DA / OPLS-DA)")
+
+            if detect_species_columns_from_diff is None:
+                st.error("multivariate_stats 模块未正确加载，请检查是否安装scikit-learn")
+            else:
+                # 读取差异分析文件用于多元统计
+                diff_df = st.session_state.get('diff_df')
+                if diff_df is None:
+                    st.warning("请先在侧边栏上传文件并点击 Start Analysis")
+                else:
+                    # 检测物种分组
+                    species_cols = detect_species_columns_from_diff(diff_df)
+
+                    # 控件区域
+                    col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([1, 1, 1])
+
+                    with col_ctrl1:
+                        analysis_type = st.selectbox(
+                            "Analysis Type",
+                            ["PCA", "PLS-DA", "OPLS-DA"],
+                            help="选择多元统计分析方法"
+                        )
+
+                    with col_ctrl2:
+                        # 构建分组选项
+                        group_options = list(species_cols.keys())
+                        selected_groups = st.multiselect(
+                            "Select Groups",
+                            group_options,
+                            default=group_options[:2] if len(group_options) >= 2 else group_options,
+                            help="选择要比较的组"
+                        )
+
+                    with col_ctrl3:
+                        scale_method = st.selectbox(
+                            "Data Scaling",
+                            ["UV", "Par"],
+                            help="UV=单位方差, Par=Pareto"
+                        )
+
+                    col_ctrl4, col_ctrl5 = st.columns([1, 1])
+                    with col_ctrl4:
+                        confidence = st.slider("Confidence Level", 0.80, 0.99, 0.95, 0.01)
+                    with col_ctrl5:
+                        n_perms = st.number_input("Permutation Tests", 50, 500, 200, 50)
+
+                    run_multivar_btn = st.button("Run Multivariate Analysis", type="primary")
+
+                    if run_multivar_btn:
+                        if len(selected_groups) < 2:
+                            st.warning("请至少选择2个组进行分析")
+                        else:
+                            # 构建丰度矩阵（仅选择特定组）
+                            selected_cols = []
+                            for sp in selected_groups:
+                                selected_cols.extend(species_cols.get(sp, []))
+
+                            # 过滤列（确保只保留存在的列）
+                            available_cols = [c for c in selected_cols if c in diff_df.columns]
+                            if len(available_cols) < 3:
+                                st.error("有效样本数不足")
+                            else:
+                                # 构建样本x代谢物矩阵
+                                mat_data = diff_df[['Metabolite'] + available_cols].copy()
+                                mat_data = mat_data.set_index('Metabolite').T
+                                mat_data.index.name = 'Sample'
+
+                                # 添加Group列
+                                groups = []
+                                for idx in mat_data.index:
+                                    for sp, cols in species_cols.items():
+                                        if idx in cols:
+                                            groups.append(sp)
+                                            break
+                                    else:
+                                        groups.append('Unknown')
+                                mat_data['Group'] = groups
+
+                                with st.spinner("Running analysis..."):
+                                    try:
+                                        # 数据标准化
+                                        X = mat_data.drop(columns=['Group']).values
+                                        if scale_method == 'UV':
+                                            X = X / np.std(X, axis=0, ddof=1, keepdims=True)
+                                        elif scale_method == 'Par':
+                                            sd = np.std(X, axis=0, ddof=1, keepdims=True)
+                                            sqrt_n = np.sqrt(np.sum(X**2, axis=0) / X.shape[0])
+                                            X = X / (sd / (sqrt_n + 1e-9) + 1e-9)
+
+                                        X_df = pd.DataFrame(X, index=mat_data.index, columns=mat_data.drop(columns=['Group']).columns)
+                                        group_labels = mat_data['Group'].values
+
+                                        if analysis_type == "PCA":
+                                            scores_df, loadings_df, var_explained = run_pca(X_df, n_components=2)
+                                            st.session_state['pca_results'] = {
+                                                'scores': scores_df, 'loadings': loadings_df,
+                                                'variance': var_explained, 'groups': species_cols, 'confidence': confidence
+                                            }
+                                            st.success("PCA analysis completed!")
+                                        elif analysis_type == "PLS-DA":
+                                            scores_df, loadings_df, vip_dict, var_explained = run_plsda(X_df, group_labels, n_components=2)
+                                            st.session_state['plsda_results'] = {
+                                                'scores': scores_df, 'loadings': loadings_df,
+                                                'vip': vip_dict, 'variance': var_explained, 'groups': species_cols, 'confidence': confidence
+                                            }
+                                            st.success("PLS-DA analysis completed!")
+                                        elif analysis_type == "OPLS-DA":
+                                            scores_df, loadings_df, vip_dict = run_oplsda(X_df, group_labels, n_components=2)
+                                            st.session_state['oplsda_results'] = {
+                                                'scores': scores_df, 'loadings': loadings_df,
+                                                'vip': vip_dict, 'groups': species_cols, 'confidence': confidence
+                                            }
+                                            st.success("OPLS-DA analysis completed!")
+                                    except Exception as e:
+                                        st.error(f"Analysis failed: {e}")
+
+                    # 显示结果
+                    st.markdown("---")
+
+                    # Scores Plot
+                    if analysis_type == "PCA" and 'pca_results' in st.session_state:
+                        res = st.session_state['pca_results']
+                        scores_df = res['scores'].copy()
+                        scores_df['Group'] = [mat_data.loc[s, 'Group'] if s in mat_data.index else 'Unknown' for s in scores_df['Sample']]
+
+                        col_fig1, col_fig2 = st.columns([1, 1])
+                        with col_fig1:
+                            fig_scores = plot_scores_scatter(
+                                scores_df, scores_df['Group'],
+                                f'{analysis_type} Scores Plot',
+                                res['variance'][0], res['variance'][1],
+                                GROUP_COLORS, 0.15
+                            )
+                            st.pyplot(fig_scores)
+                            buf = io.BytesIO()
+                            fig_scores.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                            buf.seek(0)
+                            st.download_button("Download Scores Plot", data=buf, file_name="scores_plot.png", mime="image/png")
+
+                        with col_fig2:
+                            fig_loadings = plot_loading_scatter(res['loadings'], top_n=50, title=f'{analysis_type} Loading Plot')
+                            st.pyplot(fig_loadings)
+                            buf = io.BytesIO()
+                            fig_loadings.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                            buf.seek(0)
+                            st.download_button("Download Loading Plot", data=buf, file_name="loading_plot.png", mime="image/png")
+
+                    elif analysis_type == "PLS-DA" and 'plsda_results' in st.session_state:
+                        res = st.session_state['plsda_results']
+                        scores_df = res['scores'].copy()
+                        scores_df['Group'] = [mat_data.loc[s, 'Group'] if s in mat_data.index else 'Unknown' for s in scores_df['Sample']]
+
+                        col_fig1, col_fig2 = st.columns([1, 1])
+                        with col_fig1:
+                            fig_scores = plot_scores_scatter(
+                                scores_df, scores_df['Group'],
+                                f'{analysis_type} Scores Plot',
+                                res['variance'][0] if len(res['variance']) > 0 else 0.1,
+                                res['variance'][1] if len(res['variance']) > 1 else 0.1,
+                                GROUP_COLORS, 0.15
+                            )
+                            st.pyplot(fig_scores)
+                            buf = io.BytesIO()
+                            fig_scores.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                            buf.seek(0)
+                            st.download_button("Download Scores Plot", data=buf, file_name="scores_plot.png", mime="image/png")
+
+                        with col_fig2:
+                            fig_loadings = plot_loading_scatter(res['loadings'], top_n=50, title=f'{analysis_type} Loading Plot')
+                            st.pyplot(fig_loadings)
+                            buf = io.BytesIO()
+                            fig_loadings.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                            buf.seek(0)
+                            st.download_button("Download Loading Plot", data=buf, file_name="loading_plot.png", mime="image/png")
+
+                        # VIP Top 20
+                        st.markdown("**Top 20 Metabolites by VIP (PLS-DA)**")
+                        vip_df = pd.DataFrame(list(res['vip'].items()), columns=['Metabolite', 'VIP'])
+                        vip_df = vip_df.sort_values('VIP', ascending=False).head(20)
+                        st.dataframe(vip_df, height=300)
+
+                    elif analysis_type == "OPLS-DA" and 'oplsda_results' in st.session_state:
+                        res = st.session_state['oplsda_results']
+                        scores_df = res['scores'].copy()
+                        scores_df['Group'] = [mat_data.loc[s, 'Group'] if s in mat_data.index else 'Unknown' for s in scores_df['Sample']]
+
+                        fig_scores = plot_scores_scatter(
+                            scores_df, scores_df['Group'],
+                            f'{analysis_type} Scores Plot',
+                            0.3, 0.2,
+                            GROUP_COLORS, 0.15
+                        )
+                        st.pyplot(fig_scores)
+                        buf = io.BytesIO()
+                        fig_scores.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                        buf.seek(0)
+                        st.download_button("Download Scores Plot", data=buf, file_name="scores_plot.png", mime="image/png")
+
+                        # VIP Top 20
+                        st.markdown("**Top 20 Metabolites by VIP (OPLS-DA)**")
+                        vip_df = pd.DataFrame(list(res['vip'].items()), columns=['Metabolite', 'VIP'])
+                        vip_df = vip_df.sort_values('VIP', ascending=False).head(20)
+                        st.dataframe(vip_df, height=300)
+
+                    # 置换检验（仅PLS-DA/OPLS-DA）
+                    if analysis_type in ["PLS-DA", "OPLS-DA"]:
+                        st.markdown("---")
+                        st.subheader("Permutation Test")
+                        perm_btn = st.button("Run Permutation Test (200 permutations)", type="secondary")
+
+                        if perm_btn:
+                            with st.spinner("Running permutation test..."):
+                                try:
+                                    p_val, perm_df, r2_orig = permutation_test_plsda(X_df.values, group_labels, n_perms=n_perms)
+                                    fig_perm = plot_permutation(perm_df, f'Permutation Test ({n_perms} permutations)')
+                                    st.pyplot(fig_perm)
+                                    st.info(f"Permutation p-value: {p_val:.4f} | Original R²Y: {r2_orig:.4f}")
+                                    buf = io.BytesIO()
+                                    fig_perm.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                                    buf.seek(0)
+                                    st.download_button("Download Permutation Plot", data=buf, file_name="permutation_test.png", mime="image/png")
+                                except Exception as e:
+                                    st.error(f"Permutation test failed: {e}")
+
+        # ---------- Tab 7: 两组比较分析 ----------
+        with tab7:
+            st.subheader("Two-Group Comparison Analysis (Volcano Plot + Bar Chart)")
+
+            if detect_species_columns_from_diff is None:
+                st.error("multivariate_stats 模块未正确加载")
+            else:
+                diff_df = st.session_state.get('diff_df')
+                if diff_df is None:
+                    st.warning("请先在侧边栏上传文件并点击 Start Analysis")
+                else:
+                    # 检测可用的比较组
+                    all_cols = diff_df.columns.tolist()
+                    available_groups = []
+                    for sp in ['LJ', 'BC', 'XY', 'EH', 'MB']:
+                        if any(f'{sp}_Root' in c for c in all_cols):
+                            available_groups.append(sp)
+
+                    # 控件
+                    col_t2_1, col_t2_2 = st.columns([1, 1])
+                    with col_t2_1:
+                        group1 = st.selectbox("Group 1 (Numerator)", available_groups, index=0)
+                    with col_t2_2:
+                        group2 = st.selectbox("Group 2 (Denominator)", available_groups, index=1 if len(available_groups) > 1 else 0)
+
+                    col_t2_3, col_t2_4, col_t2_5 = st.columns([1, 1, 1])
+                    with col_t2_3:
+                        p_thresh_2 = st.slider("P-value Threshold", 0.01, 0.10, 0.05, 0.01)
+                    with col_t2_4:
+                        vip_thresh_2 = st.slider("VIP Threshold", 0.5, 3.0, 1.0, 0.1)
+                    with col_t2_5:
+                        fc_thresh_2 = st.slider("FC Threshold", 0.5, 3.0, 1.0, 0.1)
+
+                    # 搜索框
+                    search_metab = st.text_input("Search Metabolite (Highlight)", "")
+
+                    chart_type = st.radio("Chart Type", ["Volcano Plot", "Bar Chart", "Both"], horizontal=True)
+                    run_volcano_btn = st.button("Generate Comparison", type="primary")
+
+                    if run_volcano_btn:
+                        with st.spinner("Computing two-group comparison..."):
+                            try:
+                                # 获取两组丰度列
+                                cols_g1 = [c for c in all_cols if f'{group1}_Root' in c]
+                                cols_g2 = [c for c in all_cols if f'{group2}_Root' in c]
+
+                                if not cols_g1 or not cols_g2:
+                                    st.error(f"未找到 {group1} 或 {group2} 的丰度列")
+                                else:
+                                    # 计算组均值
+                                    g1_mean = diff_df[cols_g1].mean(axis=1)
+                                    g2_mean = diff_df[cols_g2].mean(axis=1)
+
+                                    # 计算FC和log2FC
+                                    fc_vals = g1_mean / (g2_mean + 1e-9)
+                                    diff_df['_fc_calc'] = fc_vals
+                                    diff_df['_log2fc_calc'] = np.where(
+                                        fc_vals >= 1,
+                                        np.log2(fc_vals + 1e-9),
+                                        -np.log2(1 / fc_vals + 1e-9)
+                                    )
+
+                                    # 分类差异
+                                    def classify_diff(row):
+                                        vip = row.get('Vip_plsda', 0)
+                                        pval = row.get('P_value', 1)
+                                        fc = row.get('_fc_calc', 1)
+                                        if vip > vip_thresh_2 and pval < p_thresh_2 and fc > fc_thresh_2:
+                                            return 'Up'
+                                        elif vip > vip_thresh_2 and pval < p_thresh_2 and fc < 1 / fc_thresh_2:
+                                            return 'Down'
+                                        return 'nosig'
+
+                                    diff_df['_diff_class'] = diff_df.apply(classify_diff, axis=1)
+
+                                    up_count = (diff_df['_diff_class'] == 'Up').sum()
+                                    down_count = (diff_df['_diff_class'] == 'Down').sum()
+
+                                    st.session_state['volcano_result'] = {
+                                        'df': diff_df, 'group1': group1, 'group2': group2,
+                                        'p_thresh': p_thresh_2, 'vip_thresh': vip_thresh_2, 'fc_thresh': fc_thresh_2,
+                                        'up': up_count, 'down': down_count
+                                    }
+
+                                    st.success(f"Comparison: {group1} vs {group2} | Up: {up_count} | Down: {down_count}")
+                            except Exception as e:
+                                st.error(f"Comparison failed: {e}")
+
+                    # 显示结果
+                    if 'volcano_result' in st.session_state:
+                        res = st.session_state['volcano_result']
+                        df_show = res['df'].copy()
+
+                        # 搜索高亮
+                        if search_metab:
+                            df_show['_highlight'] = df_show['Metabolite'].str.contains(search_metab, case=False, na=False)
+                        else:
+                            df_show['_highlight'] = False
+
+                        if chart_type in ["Volcano Plot", "Both"]:
+                            st.markdown(f"**Volcano Plot: {res['group1']} vs {res['group2']}**")
+                            fig_vol = plot_volcano(df_show, p_thresh=res['p_thresh'], vip_thresh=res['vip_thresh'], fc_thresh=res['fc_thresh'])
+                            st.plotly_chart(fig_vol, width="stretch")
+
+                        if chart_type in ["Bar Chart", "Both"]:
+                            st.markdown(f"**Differential Metabolite Counts: {res['group1']} vs {res['group2']}**")
+                            fig_bar = plot_diff_bar(res['up'], res['down'], f"{res['group1']}_vs_{res['group2']}")
+                            st.plotly_chart(fig_bar, width="stretch")
+
+                        # 差异代谢物表格
+                        st.markdown("---")
+                        st.subheader("Differential Metabolites Table")
+                        sig_df = df_show[df_show['_diff_class'] != 'nosig'].copy()
+                        sig_df = sig_df.sort_values('Vip_plsda', ascending=False)
+
+                        disp_cols = ['Metabolite', 'Vip_plsda', 'P_value', 'fdr', '_fc_calc', '_log2fc_calc', '_diff_class']
+                        disp_cols = [c for c in disp_cols if c in sig_df.columns]
+                        st.dataframe(sig_df[disp_cols], height=400)
+
+                        # 下载
+                        if len(sig_df) > 0:
+                            dl_df = sig_df[disp_cols].copy()
+                            dl_bytes = df_to_excel_bytes(dl_df)
+                            st.download_button(
+                                f"Download Differential Metabolites ({res['group1']}_vs_{res['group2']})",
+                                data=dl_bytes,
+                                file_name=f"differential_metabolites_{res['group1']}_vs_{res['group2']}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+
+        # ---------- Tab 8: 多组比较分析 ----------
+        with tab8:
+            st.subheader("Multi-Group Comparison Analysis (ANOVA / Kruskal-Wallis)")
+
+            if detect_species_columns_from_diff is None:
+                st.error("multivariate_stats 模块未正确加载")
+            else:
+                diff_df = st.session_state.get('diff_df')
+                if diff_df is None:
+                    st.warning("请先在侧边栏上传文件并点击 Start Analysis")
+                else:
+                    all_cols = diff_df.columns.tolist()
+                    available_groups = []
+                    for sp in ['LJ', 'BC', 'XY', 'EH', 'MB']:
+                        if any(f'{sp}_Root' in c for c in all_cols):
+                            available_groups.append(sp)
+
+                    # 控件
+                    col_t3_1, col_t3_2 = st.columns([1, 1])
+                    with col_t3_1:
+                        selected_groups_multi = st.multiselect(
+                            "Select Groups for Comparison",
+                            available_groups,
+                            default=available_groups,
+                            help="选择3个或更多组进行比较"
+                        )
+                    with col_t3_2:
+                        test_method = st.selectbox("Statistical Test", ["Kruskal-Wallis H", "One-way ANOVA", "Both"])
+
+                    col_t3_3, col_t3_4 = st.columns([1, 1])
+                    with col_t3_3:
+                        p_thresh_multi = st.slider("P-value Threshold", 0.01, 0.10, 0.05, 0.01)
+                    with col_t3_4:
+                        top_n_heatmap = st.slider("Top N (Heatmap)", 20, 100, 50, 10)
+
+                    cluster_method = st.selectbox("Clustering Method", ["ward", "single", "complete", "average"])
+
+                    run_multi_btn = st.button("Run Multi-Group Analysis", type="primary")
+
+                    if run_multi_btn:
+                        if len(selected_groups_multi) < 3:
+                            st.warning("请至少选择3个组进行分析")
+                        else:
+                            with st.spinner("Running multi-group analysis..."):
+                                try:
+                                    # 构建groups_dict
+                                    groups_dict = {}
+                                    for sp in selected_groups_multi:
+                                        cols = [c for c in all_cols if f'{sp}_Root' in c]
+                                        if cols:
+                                            groups_dict[sp] = cols
+
+                                    # 构建abundance_df（长格式）
+                                    rows = []
+                                    for sp, cols in groups_dict.items():
+                                        for col in cols:
+                                            row = {'Sample': col, 'Group': sp}
+                                            for _, mrow in diff_df.iterrows():
+                                                row[mrow['Metabolite']] = mrow[col]
+                                            rows.append(row)
+                                    abundance_df = pd.DataFrame(rows).set_index('Sample')
+
+                                    # 对每个代谢物进行检验
+                                    metabolites = diff_df['Metabolite'].unique()
+                                    test_results = []
+
+                                    for metab in metabolites:
+                                        if metab not in abundance_df.columns:
+                                            continue
+
+                                        groups_data = []
+                                        valid_groups = []
+                                        for sp in selected_groups_multi:
+                                            if sp in groups_dict:
+                                                cols = groups_dict[sp]
+                                                vals = pd.to_numeric(abundance_df.loc[cols, metab], errors='coerce').dropna().values
+                                                if len(vals) >= 2:
+                                                    groups_data.append(vals)
+                                                    valid_groups.append(sp)
+
+                                        if len(groups_data) < 2:
+                                            continue
+
+                                        try:
+                                            if test_method in ["Kruskal-Wallis H", "Both"]:
+                                                h_stat, p_kw = stats.kruskal(*groups_data)
+                                            else:
+                                                h_stat, p_kw = np.nan, np.nan
+
+                                            if test_method in ["One-way ANOVA", "Both"]:
+                                                f_stat, p_anova = stats.f_oneway(*groups_data)
+                                            else:
+                                                f_stat, p_anova = np.nan, np.nan
+
+                                            test_results.append({
+                                                'Metabolite': metab,
+                                                'F_statistic': f_stat,
+                                                'P_ANOVA': p_anova,
+                                                'H_statistic': h_stat,
+                                                'P_Kruskal': p_kw,
+                                                'N_groups': len(valid_groups)
+                                            })
+                                        except Exception:
+                                            continue
+
+                                    results_df = pd.DataFrame(test_results)
+
+                                    # BH校正
+                                    if test_method in ["Kruskal-Wallis H", "Both"] and 'P_Kruskal' in results_df.columns:
+                                        results_df = results_df.sort_values('P_Kruskal')
+                                        n = len(results_df)
+                                        results_df['P_Kruskal_BH'] = results_df['P_Kruskal'] * n / (results_df.index + 1)
+
+                                    if test_method in ["One-way ANOVA", "Both"] and 'P_ANOVA' in results_df.columns:
+                                        results_df = results_df.sort_values('P_ANOVA')
+                                        n = len(results_df)
+                                        results_df['P_ANOVA_BH'] = results_df['P_ANOVA'] * n / (results_df.index + 1)
+
+                                    # VIP均值
+                                    vip_map = diff_df.groupby('Metabolite')['Vip_plsda'].mean().to_dict()
+                                    results_df['VIP_mean'] = results_df['Metabolite'].map(vip_map)
+
+                                    st.session_state['multi_group_results'] = {
+                                        'results': results_df,
+                                        'groups_dict': groups_dict,
+                                        'abundance_df': abundance_df,
+                                        'p_thresh': p_thresh_multi,
+                                        'top_n': top_n_heatmap,
+                                        'cluster_method': cluster_method
+                                    }
+
+                                    sig_count = (results_df['P_Kruskal'] < p_thresh_multi).sum() if 'P_Kruskal' in results_df.columns else 0
+                                    st.success(f"Multi-group analysis completed! Significant metabolites: {sig_count} (P < {p_thresh_multi})")
+
+                                except Exception as e:
+                                    st.error(f"Analysis failed: {e}")
+
+                    # 显示结果
+                    if 'multi_group_results' in st.session_state:
+                        res = st.session_state['multi_group_results']
+                        results_df = res['results']
+
+                        # 显著代谢物表格
+                        if 'P_Kruskal' in results_df.columns:
+                            sig_df = results_df[results_df['P_Kruskal'] < res['p_thresh']].copy()
+                        elif 'P_ANOVA' in results_df.columns:
+                            sig_df = results_df[results_df['P_ANOVA'] < res['p_thresh']].copy()
+                        else:
+                            sig_df = results_df.copy()
+
+                        sig_df = sig_df.sort_values('P_Kruskal' if 'P_Kruskal' in sig_df.columns else 'P_ANOVA')
+
+                        st.markdown(f"**Significant Metabolites: {len(sig_df)}**")
+                        disp_cols = ['Metabolite', 'F_statistic', 'P_ANOVA', 'H_statistic', 'P_Kruskal', 'VIP_mean']
+                        disp_cols = [c for c in disp_cols if c in sig_df.columns]
+                        st.dataframe(sig_df[disp_cols].head(50), height=400)
+
+                        # 聚类热图
+                        st.markdown("---")
+                        st.subheader("Clustered Heatmap")
+                        top_metabs = sig_df.head(res['top_n'])['Metabolite'].tolist() if len(sig_df) > 0 else results_df.head(res['top_n'])['Metabolite'].tolist()
+
+                        if top_metabs:
+                            try:
+                                # 构建热图数据
+                                all_samples = []
+                                for sp, cols in res['groups_dict'].items():
+                                    all_samples.extend(cols)
+
+                                heatmap_data = diff_df[diff_df['Metabolite'].isin(top_metabs)][['Metabolite'] + all_samples].copy()
+                                heatmap_data = heatmap_data.set_index('Metabolite')
+
+                                # Z-score标准化
+                                z_data = heatmap_data.apply(lambda x: (x - x.mean()) / (x.std() + 1e-9), axis=1).fillna(0)
+                                z_data.index = [n[:25] + '...' if len(n) > 25 else n for n in z_data.index]
+
+                                fig_heat = px.imshow(
+                                    z_data.values,
+                                    x=z_data.columns,
+                                    y=z_data.index,
+                                    color_continuous_scale='RdBu_r',
+                                    title=f'Clustered Heatmap (Top {len(top_metabs)} by P-value, Z-score)',
+                                    labels=dict(x='Sample', y='Metabolite', color='Z-score'),
+                                    height=max(400, len(z_data) * 8),
+                                    width=900
+                                )
+                                fig_heat.update_layout(xaxis={'tickangle': 45}, font=dict(size=9))
+                                st.plotly_chart(fig_heat, width="stretch")
+                            except Exception as e:
+                                st.warning(f"Heatmap generation failed: {e}")
+
+                        # 箱线图
+                        st.markdown("---")
+                        st.subheader("Boxplot of Top Differential Metabolites")
+
+                        if len(sig_df) > 0:
+                            top5_metabs = sig_df.head(5)['Metabolite'].tolist()
+                            metab_to_show = st.selectbox("Select Metabolite", top5_metabs)
+
+                            try:
+                                metab = metab_to_show
+                                rows_box = []
+                                for sp, cols in res['groups_dict'].items():
+                                    for col in cols:
+                                        val = diff_df[diff_df['Metabolite'] == metab][col].values
+                                        if len(val) > 0:
+                                            rows_box.append({'Group': sp, 'Sample': col, 'Abundance': val[0]})
+
+                                box_df = pd.DataFrame(rows_box)
+                                box_df['Abundance'] = pd.to_numeric(box_df['Abundance'], errors='coerce')
+                                box_df = box_df.dropna()
+
+                                if len(box_df) > 0:
+                                    fig_box = px.box(
+                                        box_df, x='Group', y='Abundance', color='Group',
+                                        title=f'Abundance Distribution: {metab[:40]}',
+                                        color_discrete_map={g: GROUP_COLORS.get(g, '#3498db') for g in box_df['Group'].unique()}
+                                    )
+                                    fig_box.update_layout(height=400)
+                                    st.plotly_chart(fig_box, width="stretch")
+                            except Exception as e:
+                                st.warning(f"Boxplot generation failed: {e}")
+
+                        # 下载
+                        if len(results_df) > 0:
+                            dl_df = results_df.copy()
+                            dl_bytes = df_to_excel_bytes(dl_df)
+                            st.download_button(
+                                "Download Multi-Group Analysis Results",
+                                data=dl_bytes,
+                                file_name="multi_group_comparison_results.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+
     else:
         # 未运行分析时显示说明
         st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")
