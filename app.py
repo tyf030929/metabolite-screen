@@ -1824,7 +1824,7 @@ def main():
 
                     col_ctrl4, col_ctrl5 = st.columns([1, 1])
                     with col_ctrl4:
-                        confidence = st.slider("Confidence Level", 0.80, 0.99, 0.95, 0.01)
+                        confidence = st.slider("Confidence Level", 0.80, 0.99, 0.95, 0.01, key="conf_lvl")
                     with col_ctrl5:
                         n_perms = st.number_input("Permutation Tests", 50, 500, 200, 50)
 
@@ -1859,6 +1859,9 @@ def main():
                                     else:
                                         groups.append('Unknown')
                                 mat_data['Group'] = groups
+
+                                # 将分组映射保存到 session_state（供展示区使用）
+                                st.session_state['_mat_data_groups'] = dict(zip(mat_data.index, mat_data['Group']))
 
                                 with st.spinner("Running analysis..."):
                                     try:
@@ -1901,11 +1904,14 @@ def main():
                     # 显示结果
                     st.markdown("---")
 
+                    # 辅助：从session_state恢复分组
+                    _group_map = st.session_state.get('_mat_data_groups', {})
+
                     # Scores Plot
                     if analysis_type == "PCA" and 'pca_results' in st.session_state:
                         res = st.session_state['pca_results']
                         scores_df = res['scores'].copy()
-                        scores_df['Group'] = [mat_data.loc[s, 'Group'] if s in mat_data.index else 'Unknown' for s in scores_df['Sample']]
+                        scores_df['Group'] = [_group_map.get(s, 'Unknown') for s in scores_df['Sample']]
 
                         col_fig1, col_fig2 = st.columns([1, 1])
                         with col_fig1:
@@ -1932,7 +1938,7 @@ def main():
                     elif analysis_type == "PLS-DA" and 'plsda_results' in st.session_state:
                         res = st.session_state['plsda_results']
                         scores_df = res['scores'].copy()
-                        scores_df['Group'] = [mat_data.loc[s, 'Group'] if s in mat_data.index else 'Unknown' for s in scores_df['Sample']]
+                        scores_df['Group'] = [_group_map.get(s, 'Unknown') for s in scores_df['Sample']]
 
                         col_fig1, col_fig2 = st.columns([1, 1])
                         with col_fig1:
@@ -1966,7 +1972,7 @@ def main():
                     elif analysis_type == "OPLS-DA" and 'oplsda_results' in st.session_state:
                         res = st.session_state['oplsda_results']
                         scores_df = res['scores'].copy()
-                        scores_df['Group'] = [mat_data.loc[s, 'Group'] if s in mat_data.index else 'Unknown' for s in scores_df['Sample']]
+                        scores_df['Group'] = [_group_map.get(s, 'Unknown') for s in scores_df['Sample']]
 
                         fig_scores = plot_scores_scatter(
                             scores_df, scores_df['Group'],
@@ -2033,11 +2039,11 @@ def main():
 
                     col_t2_3, col_t2_4, col_t2_5 = st.columns([1, 1, 1])
                     with col_t2_3:
-                        p_thresh_2 = st.slider("P-value Threshold", 0.01, 0.10, 0.05, 0.01)
+                        p_thresh_2 = st.slider("P-value Threshold", 0.01, 0.10, 0.05, 0.01, key="p_thresh_2")
                     with col_t2_4:
-                        vip_thresh_2 = st.slider("VIP Threshold", 0.5, 3.0, 1.0, 0.1)
+                        vip_thresh_2 = st.slider("VIP Threshold", 0.5, 3.0, 1.0, 0.1, key="vip_thresh_2")
                     with col_t2_5:
-                        fc_thresh_2 = st.slider("FC Threshold", 0.5, 3.0, 1.0, 0.1)
+                        fc_thresh_2 = st.slider("FC Threshold", 0.5, 3.0, 1.0, 0.1, key="fc_thresh_2")
 
                     # 搜索框
                     search_metab = st.text_input("Search Metabolite (Highlight)", "")
@@ -2167,9 +2173,9 @@ def main():
 
                     col_t3_3, col_t3_4 = st.columns([1, 1])
                     with col_t3_3:
-                        p_thresh_multi = st.slider("P-value Threshold", 0.01, 0.10, 0.05, 0.01)
+                        p_thresh_multi = st.slider("P-value Threshold", 0.01, 0.10, 0.05, 0.01, key="p_thresh_multi")
                     with col_t3_4:
-                        top_n_heatmap = st.slider("Top N (Heatmap)", 20, 100, 50, 10)
+                        top_n_heatmap = st.slider("Top N (Heatmap)", 20, 100, 50, 10, key="top_n_heatmap")
 
                     cluster_method = st.selectbox("Clustering Method", ["ward", "single", "complete", "average"])
 

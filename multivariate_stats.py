@@ -148,7 +148,7 @@ def run_pca(abundance_matrix, n_components=2):
     scores = U * S  # PC scores
     loadings = Vt.T  # PC loadings
 
-    var_explained = (S**2) / np.sum(S**2)
+    var_explained = (S**2) / (np.sum(S**2) + 1e-10)
 
     # 构建结果DataFrame
     sample_names = abundance_matrix.index.tolist()
