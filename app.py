@@ -1143,6 +1143,69 @@ def main():
                                 star_df = star_df.sort_values('_star_score_v2', ascending=False).reset_index(drop=True)
                                 st.session_state['star_df_v2'] = star_df
                                 st.success("明星分子评分已更新（含药理证据维度）！请切换到 Star Molecules 标签页查看。")
+
+                # ---- 可选：本地文件上传区（作为补充）----
+                st.markdown("---")
+                st.markdown("#### Optional: Local DB Files / Directory (TCMSP / DrugBank / TTD)")
+                if match_pharma_db is not None:
+                    tcmsp_dir = st.text_input(
+                        "TCMSP 数据目录路径",
+                        value="",
+                        placeholder=r"C:\Users\tyf\.qclaw\workspace\tcmsp_data",
+                        help="填入 TCMSP 数据文件所在目录，程序将自动扫描并加载所有 CSV 文件"
+                    ).strip()
+                    tcmsp_file = st.file_uploader("TCMSP 单文件", type=['xlsx', 'xls', 'csv'], help="与目录路径二选一")
+                    db_col1, db_col2 = st.columns(2)
+                    with db_col1:
+                        drugbank_file = st.file_uploader("DrugBank File", type=['csv', 'tsv', 'xml'], help="DrugBank 数据库")
+                    with db_col2:
+                        ttd_file = st.file_uploader("TTD File", type=['xlsx', 'xls', 'csv', 'tsv'], help="TTD (Therapeutic Target Database)")
+                    local_query_btn = st.button("Run Local DB Query", width="stretch")
+                    if local_query_btn:
+                        with st.spinner("Loading local database files..."):
+                            if tcmsp_dir:
+                                try:
+                                    tcmsp_data = load_tcmsp_from_dir(tcmsp_dir)
+                                    st.info(f"TCMSP 目录加载: {len(tcmsp_data)} 化合物")
+                                except Exception as e:
+                                    st.warning(f"TCMSP 目录加载失败: {e}，尝试单文件方式")
+                                    tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
+                            else:
+                                tcmsp_data = load_tcmsp(tcmsp_file) if tcmsp_file else {}
+                            drugbank_data = load_drugbank(drugbank_file) if drugbank_file else {}
+                            ttd_data = load_ttd(ttd_file) if ttd_file else {}
+                            st.info(f"TCMSP: {len(tcmsp_data)} | DrugBank: {len(drugbank_data)} | TTD: {len(ttd_data)}")
+                        with st.spinner("Matching compounds..."):
+                            metabolites = st.session_state['pharma_df']['Metabolite'].tolist()
+                            progress_bar2 = st.progress(0)
+                            def pbar(current, total):
+                                progress_bar2.progress(int(current / total * 100))
+                            pharma_match_df = match_pharma_db(
+                                metabolites=metabolites,
+                                tcmsp_data=tcmsp_data,
+                                drugbank_data=drugbank_data,
+                                ttd_data=ttd_data,
+                                progress_callback=pbar,
+                            )
+                            progress_bar2.empty()
+                            st.session_state['pharma_match_df'] = pharma_match_df
+                            n_tcmsp = pharma_match_df['TCMSP_OB'].notna().sum()
+                            n_db = (pharma_match_df['DrugBank_Targets'] != '-').sum()
+                            n_ttd = (pharma_match_df['TTD_Targets'] != '-').sum()
+                            n_active = (pharma_match_df['Pharma_Evidence_Score'] > 0).sum()
+                            st.success(f"本地匹配完成！TCMSP: {n_tcmsp} | DrugBank: {n_db} | TTD: {n_ttd} | 有证据: {n_active}/{len(pharma_match_df)}")
+                            if 'star_df' in st.session_state and len(st.session_state['star_df']) > 0:
+                                with st.spinner("Recalculating star scores..."):
+                                    star_df = st.session_state['star_df'].copy()
+                                    score_map = pharma_match_df.set_index('Metabolite')['Pharma_Evidence_Score'].to_dict()
+                                    star_df['_pharma_evidence'] = star_df['Metabolite'].map(score_map).fillna(0)
+                                    pe_max = star_df['_pharma_evidence'].max()
+                                    star_df['_pharma_evidence_norm'] = star_df['_pharma_evidence'] / pe_max if pe_max > 0 else 0
+                                    star_df['_star_score_v2'] = star_df['_vip_norm'].fillna(0) * 0.25 + star_df['_diff_norm'].fillna(0) * 0.25 + star_df['_pharma_score'].fillna(0) * 0.30 + star_df['_pharma_evidence_norm'].fillna(0) * 0.20
+                                    star_df = star_df.sort_values('_star_score_v2', ascending=False).reset_index(drop=True)
+                                    st.session_state['star_df_v2'] = star_df
+                                    st.success("明星分子评分已更新！请切换到 Star Molecules 标签页查看。")
+
                 if 'pharma_match_df' in st.session_state and len(st.session_state['pharma_match_df']) > 0:
                     pm_df = st.session_state['pharma_match_df']
                     is_online = 'Data_Sources' in pm_df.columns
