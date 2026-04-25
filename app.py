@@ -35,7 +35,7 @@ except ImportError:
     load_tcmsp = load_tcmsp_from_dir = load_drugbank = load_ttd = match_pharma_db = compute_pharma_evidence_score = None
 
 try:
-    from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online
+    from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online, get_cache_status
 except ImportError:
     match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = None
 
@@ -1117,10 +1117,22 @@ def main():
             if match_pharma_online is None:
                 st.error("pharma_cache.py 模块未正确加载。请确保 pharma_cache.py 与 app.py 在同一目录下。")
             else:
+                # 显示本地缓存状态提示
+                cache_info = get_cache_status()
+                if cache_info['disk_cache_valid']:
+                    st.success(f"✅ 检测到本地 DrugCentral 缓存（共 {cache_info.get('disk_cache_targets_count', 0)} 条记录），将直接使用，无需重新下载")
+                else:
+                    st.info("ℹ️ 首次使用将自动下载 DrugCentral 数据库（约 1-2 分钟），之后自动使用本地缓存")
+
                 st.markdown("#### 自动在线查询（DrugCentral + PubChem）")
                 online_query_btn = st.button("Start Online Pharma Query (Auto-Download)", type="primary", width="stretch", help="首次运行时会自动下载 DrugCentral 数据库（约 1-2 分钟），之后直接使用缓存")
                 if online_query_btn:
-                    with st.spinner("首次使用，正在下载 DrugCentral 数据库（仅下载一次）..."):
+                    # 根据缓存状态动态显示 spinner 提示
+                    if cache_info['disk_cache_valid']:
+                        spinner_msg = "正在从本地缓存加载 DrugCentral 数据..."
+                    else:
+                        spinner_msg = "首次使用，正在下载 DrugCentral 数据库（仅下载一次）..."
+                    with st.spinner(spinner_msg):
                         metabolites = st.session_state['pharma_df']['Metabolite'].tolist()
                         progress_bar = st.progress(0)
                         def progress_callback(current, total):

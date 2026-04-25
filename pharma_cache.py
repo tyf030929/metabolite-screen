@@ -2,6 +2,7 @@
 """
 药理数据库自动下载与缓存模块 - 修复版
 去除悬空代码，添加并发下载优化
+已修复：DrugCentral 磁盘缓存持久化，避免每次重新下载
 """
 import io, os, re, time, gzip, json, hashlib, requests, pandas as pd, numpy as np
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +42,35 @@ def _normalize_name(name):
 
 def _ensure_cache_dir():
     if not os.path.exists(_CACHE_DIR): os.makedirs(_CACHE_DIR, exist_ok=True)
+
+def _validate_disk_cache():
+    """
+    验证磁盘缓存是否完整有效（不依赖内存中的 _drugcentral_loaded 标志）。
+    解决 Streamlit 重载时全局变量重置导致缓存失效的问题。
+    """
+    cache_path = _DRUGCENTRAL_CACHE_FILE
+    if not os.path.exists(cache_path):
+        return False
+    # 文件太小说明下载不完整（实际 drugcentral_data.json 应 > 5MB）
+    if os.path.getsize(cache_path) < 1024 * 1024:  # < 1MB
+        return False
+    # 尝试解析验证结构完整性
+    try:
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return False
+        targets = data.get('targets', {})
+        structures = data.get('structures', {})
+        # 至少要有实质数据（DrugCentral 解析后应有数万条记录）
+        if not isinstance(targets, dict) or len(targets) < 100:
+            return False
+        # structures 允许为空（structures 文件可能下载失败）
+        if not isinstance(structures, dict):
+            return False
+        return True
+    except Exception:
+        return False
 
 def _load_drugcentral_from_disk():
     if not os.path.exists(_DRUGCENTRAL_CACHE_FILE): return False
@@ -82,10 +112,15 @@ def _download_with_retry(session, url, max_retries=3, timeout=120):
 
 def _load_drugcentral(force_download=False):
     global _drugcentral_loaded, _drugcentral_targets, _drugcentral_structures
-    if _drugcentral_loaded and not force_download: return True
-    if not force_download and _load_drugcentral_from_disk():
-        _drugcentral_loaded = True; return True
-    print("[pharma_cache] First use, downloading DrugCentral (concurrent)...")
+    # 如果已加载且非强制下载，直接返回（内存命中）
+    if _drugcentral_loaded and not force_download and len(_drugcentral_targets) > 0:
+        return True
+    # 优先检查磁盘缓存（不依赖 _drugcentral_loaded 标志，解决 Streamlit 重载问题）
+    if not force_download and _validate_disk_cache():
+        if _load_drugcentral_from_disk():
+            _drugcentral_loaded = True
+            return True
+    # 以下为下载逻辑...
     session = _get_session()
     with ThreadPoolExecutor(max_workers=2) as executor:
         f1 = executor.submit(_download_with_retry, session, _DRUGCENTRAL_INTERACTION_URL)
@@ -293,5 +328,28 @@ def match_pharma_online(metabolites, progress_callback=None):
     return pd.DataFrame(rows)
 
 def is_drugcentral_available(): return _drugcentral_loaded and len(_drugcentral_targets)>0
-def get_cache_status(): return {'drugcentral_loaded':_drugcentral_loaded,'drugcentral_targets_count':len(_drugcentral_targets),'drugcentral_structures_count':len(_drugcentral_structures),'pubchem_cache_count':len(_pubchem_cache)}
+
+def get_cache_status():
+    """
+    返回缓存状态，包含磁盘缓存信息。
+    UI 层可据此判断是否显示"使用本地缓存"而非"下载"。
+    """
+    disk_cache_valid = _validate_disk_cache()
+    disk_count = 0
+    if disk_cache_valid:
+        try:
+            with open(_DRUGCENTRAL_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            disk_count = len(data.get('targets', {}))
+        except Exception:
+            pass
+    return {
+        'drugcentral_loaded': _drugcentral_loaded and len(_drugcentral_targets) > 0,
+        'drugcentral_targets_count': len(_drugcentral_targets),
+        'drugcentral_structures_count': len(_drugcentral_structures),
+        'disk_cache_valid': disk_cache_valid,
+        'disk_cache_path': _DRUGCENTRAL_CACHE_FILE if disk_cache_valid else None,
+        'disk_cache_targets_count': disk_count,
+        'pubchem_cache_count': len(_pubchem_cache)
+    }
 
