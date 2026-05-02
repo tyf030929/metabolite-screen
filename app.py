@@ -35,6 +35,17 @@ except ImportError:
     load_tcmsp = load_tcmsp_from_dir = load_drugbank = load_ttd = match_pharma_db = compute_pharma_evidence_score = None
 
 try:
+    from network_pharma import (
+        query_smiles_by_name, batch_query_smiles,
+        query_swiss_target_prediction, batch_swiss_target_prediction,
+        run_gseapy_enrichment, merge_enrichment_results, plot_enrichment_dotplot,
+    )
+except ImportError:
+    query_smiles_by_name = batch_query_smiles = None
+    query_swiss_target_prediction = batch_swiss_target_prediction = None
+    run_gseapy_enrichment = merge_enrichment_results = plot_enrichment_dotplot = None
+
+try:
     from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online, get_cache_status
 except ImportError:
     match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = None
