@@ -89,15 +89,32 @@ def batch_query_smiles(df: pd.DataFrame, name_col: str = 'compound_name',
     """
     result_df = df.copy()
     if 'SMILES' not in result_df.columns:
-        result_df['SMILES'] = 'PENDING'
+        result_df['SMILES'] = 'NOT_IN_DATA'
 
-    n = len(result_df)
+    # 预过滤：跳过无效名称
+    invalid_vals = {None, '', '-', 'nan', 'NaN', 'Na', 'NULL'}
+    n_total = len(result_df)
+
     for i, (_, row) in enumerate(result_df.iterrows()):
-        name = row.get(name_col, '')
-        smiles = query_smiles_by_name(name)
+        name = row.get(name_col, None)
+        # 跳过无效名称
+        if str(name).strip() in invalid_vals or pd.isna(name):
+            result_df.at[_, 'SMILES'] = 'NO_NAME'
+            if progress_callback:
+                progress_callback(i + 1, n_total)
+            continue
+
+        # 已有有效结果则跳过
+        cur = result_df.at[_, 'SMILES']
+        if cur not in ('PENDING', 'NOT_IN_DATA', 'NO_NAME'):
+            if progress_callback:
+                progress_callback(i + 1, n_total)
+            continue
+
+        smiles = query_smiles_by_name(str(name).strip())
         result_df.at[_, 'SMILES'] = smiles
         if progress_callback:
-            progress_callback(i + 1, n)
+            progress_callback(i + 1, n_total)
         time.sleep(0.3)  # 避免对 PubChem 请求过快
 
     return result_df

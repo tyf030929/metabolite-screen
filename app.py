@@ -1673,10 +1673,13 @@ def main():
                                 progress_bar.progress(int(cur / tot * 100))
                             df_out = batch_query_smiles(df_in, name_col='compound_name', progress_callback=pg_cb)
                             progress_bar.empty()
-                            sm_found = (df_out['SMILES'] != 'NOT_FOUND').sum()
-                            st.success(f"查询完成！找到 SMILES: {sm_found}/{len(df_out)}")
+                            total = len(df_out)
+                            sm_found = (df_out['SMILES'].apply(lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING'))).sum()
+                            sm_no_name = (df_out['SMILES'] == 'NO_NAME').sum()
+                            sm_not_found = (df_out['SMILES'] == 'NOT_FOUND').sum()
+                            st.success(f"查询完成！找到 SMILES: {sm_found}/{total}（无名称跳过: {sm_no_name}，未找到: {sm_not_found}）")
                             # 存入 session_state 供下游使用
-                            st.session_state['smiles_df'] = df_out
+                            st.session_state['smiles_df'] = df_out[df_out['SMILES'].apply(lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING'))]
                             st.dataframe(df_out[['Metabolite', 'compound_name', 'SMILES']].head(30), height=300)
                             b = io.BytesIO()
                             with pd.ExcelWriter(b, engine='openpyxl') as w:
