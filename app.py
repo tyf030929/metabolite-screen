@@ -1661,33 +1661,110 @@ def main():
                                 st.warning("未找到该化合物的 SMILES，请尝试其他名称或检查拼写")
 
                     st.markdown("---")
-                    st.markdown("#### 批量 SMILES 查询（基于当前候选化合物）")
-                    if st.button("为所有药理候选化合物查询 SMILES", type="secondary"):
+                    st.markdown("#### 批量 SMILES 查询（双列 fallback：compound_name → Metabolite）")
+
+                    # ---- 新功能：Top 20 Star Molecules ----
+                    col_s1, col_s2 = st.columns([1, 1])
+                    with col_s1:
+                        st.markdown("**⭐ Top 20 Star Molecules**")
+                        top20_btn = st.button(
+                            "⭐ 查询 Top 20 Star Molecules 的 SMILES",
+                            type="primary",
+                            help="取当前 Star Molecules 列表中综合评分最高的前20个进行 SMILES 查询"
+                        )
+                    with col_s2:
+                        st.markdown("**全部候选化合物**")
+                        all_btn = st.button(
+                            "查询所有药理候选化合物的 SMILES",
+                            type="secondary"
+                        )
+
+                    target_df_for_query = None
+                    query_label = ""
+
+                    if top20_btn:
+                        if st.session_state.get('star_df') is None and st.session_state.get('star_df_v2') is None:
+                            st.warning("请先在侧边栏运行分析，生成 Star Molecules 列表")
+                        else:
+                            sdf = st.session_state.get('star_df_v2') or st.session_state.get('star_df')
+                            top20 = sdf.head(20).copy()
+                            # 合并 pharma_df 获取 compound_name 列
+                            if st.session_state.get('pharma_df') is not None:
+                                name_map = st.session_state['pharma_df'].set_index('Metabolite')['compound_name'].to_dict()
+                                top20['compound_name'] = top20['Metabolite'].map(name_map).fillna('-')
+                            target_df_for_query = top20
+                            query_label = "Top 20 Star Molecules"
+                            st.info(f"将对 {len(top20)} 个 Star Molecule 进行 SMILES 查询（含 fallback）")
+
+                    if all_btn:
                         if st.session_state.get('pharma_df') is None:
                             st.warning("请先在侧边栏运行分析")
                         else:
-                            df_in = st.session_state['pharma_df'].copy()
-                            df_in = df_in.rename(columns={'compound_name': 'compound_name'})
-                            progress_bar = st.progress(0)
-                            def pg_cb(cur, tot):
-                                progress_bar.progress(int(cur / tot * 100))
-                            df_out = batch_query_smiles(df_in, name_col='compound_name', progress_callback=pg_cb)
-                            progress_bar.empty()
-                            total = len(df_out)
-                            sm_found = (df_out['SMILES'].apply(lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING'))).sum()
-                            sm_no_name = (df_out['SMILES'] == 'NO_NAME').sum()
-                            sm_not_found = (df_out['SMILES'] == 'NOT_FOUND').sum()
-                            st.success(f"查询完成！找到 SMILES: {sm_found}/{total}（无名称跳过: {sm_no_name}，未找到: {sm_not_found}）")
-                            # 存入 session_state 供下游使用
-                            st.session_state['smiles_df'] = df_out[df_out['SMILES'].apply(lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING'))]
-                            st.dataframe(df_out[['Metabolite', 'compound_name', 'SMILES']].head(30), height=300)
-                            b = io.BytesIO()
-                            with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                df_out[['Metabolite', 'compound_name', 'SMILES']].to_excel(w, index=False, sheet_name='SMILES')
-                            b.seek(0)
-                            st.download_button("Download SMILES Results", data=b.getvalue(),
-                                file_name="smiles_query_results.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            target_df_for_query = st.session_state['pharma_df'].copy()
+                            query_label = f"全部 {len(target_df_for_query)} 个候选化合物"
+
+                    if target_df_for_query is not None:
+                        progress_bar = st.progress(0)
+                        def pg_cb(cur, tot):
+                            progress_bar.progress(int(cur / tot * 100))
+                        df_out = batch_query_smiles(target_df_for_query,
+                                                     name_col='compound_name',
+                                                     progress_callback=pg_cb)
+                        progress_bar.empty()
+
+                        total = len(df_out)
+                        valid_smiles = df_out['SMILES'].apply(
+                            lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING')
+                        )
+                        sm_found = valid_smiles.sum()
+                        sm_no_name = (df_out['SMILES'] == 'NO_NAME').sum()
+                        sm_not_found = (df_out['SMILES'] == 'NOT_FOUND').sum()
+
+                        # 来源统计
+                        src_compound = ((df_out['SMILES_Source'] == 'compound_name') & valid_smiles).sum()
+                        src_metab = ((df_out['SMILES_Source'] == 'Metabolite') & valid_smiles).sum()
+
+                        st.success(
+                            f"查询完成！找到 SMILES: **{sm_found}/{total}** "
+                            f"（compound_name来源: {src_compound}，Metabolite名称fallback: {src_metab}，"
+                            f"无名称跳过: {sm_no_name}，仍未找到: {sm_not_found}）"
+                        )
+
+                        # 分类展示结果
+                        found_df = df_out[valid_smiles].copy()
+                        not_found_df = df_out[df_out['SMILES'] == 'NOT_FOUND'].copy()
+
+                        if len(found_df) > 0:
+                            st.markdown("**✅ 已找到 SMILES**")
+                            disp_cols = ['Metabolite', 'compound_name', 'SMILES', 'SMILES_Source']
+                            st.dataframe(
+                                found_df[disp_cols].head(30),
+                                height=min(400, 30 * 35)
+                            )
+
+                        if len(not_found_df) > 0 and len(not_found_df) <= 50:
+                            st.markdown(f"**❌ 仍未找到（{len(not_found_df)} 个）**")
+                            st.dataframe(
+                                not_found_df[['Metabolite', 'compound_name', 'SMILES_Source']].head(20),
+                                height=min(300, 20 * 35)
+                            )
+
+                        # 存入 session_state（只存有效结果）
+                        st.session_state['smiles_df'] = found_df
+                        st.session_state['smiles_all_df'] = df_out
+
+                        b = io.BytesIO()
+                        with pd.ExcelWriter(b, engine='openpyxl') as w:
+                            df_out[['Metabolite', 'compound_name', 'SMILES', 'SMILES_Source']].to_excel(
+                                w, index=False, sheet_name='SMILES'
+                            )
+                        b.seek(0)
+                        st.download_button(
+                            f"Download SMILES Results（{query_label}）",
+                            data=b.getvalue(),
+                            file_name="smiles_query_results.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
 
                 # ====== ② SwissTargetPrediction ======
                 elif "②" in np_mode:

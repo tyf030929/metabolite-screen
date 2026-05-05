@@ -20,14 +20,47 @@ _PROB_THRESHOLD = 0.01  # 靶点预测概率阈值
 
 # ===================== SMILES 查询 =====================
 
+def _parse_first_name(name: str) -> str:
+    """从 compound_name 字段中提取第一个合法名称（处理分号、空格等）"""
+    if not name:
+        return ''
+    name = str(name).strip()
+    # 取分号/逗号前第一段
+    for sep in (';', ',', '/'):
+        if sep in name:
+            name = name.split(sep)[0].strip()
+    return name
+
+
+def _name_to_query(name: str) -> str:
+    """
+    将用户输入的化合物名称转换为适合 PubChem 查询的字符串。
+    去掉括号内容、-等常见格式问题。
+    """
+    if not name:
+        return ''
+    name = str(name).strip()
+    # 去掉括号及其内容，如 "(2R)-Naringenin" -> "Naringenin"
+    name = re.sub(r'\([^)]*\)', '', name)
+    # 去掉结尾的连字符和多余空格
+    name = re.sub(r'\s+-\s*$', '', name).strip()
+    # 多个空格变一个
+    name = re.sub(r'\s+', ' ', name)
+    return name
+
+
 @st.cache_data(ttl=3600)
 def query_smiles_by_name(compound_name: str) -> str:
     """
     通过 PubChem REST API 按化合物名称查询 SMILES。
-    使用 @st.cache_data 缓存，避免重复查询。
+    支持多策略 fallback：
+      1. 精确查询（处理过的名称）
+      2. fuzzy 模糊匹配
+      3. CAS 号查询（格式如 117-39-5）
+      4. 原始名称（不经处理直接查）
 
     Args:
-        compound_name: 化合物名称
+        compound_name: 原始化合物名称
 
     Returns:
         SMILES 字符串，查不到返回 "NOT_FOUND"
@@ -35,41 +68,87 @@ def query_smiles_by_name(compound_name: str) -> str:
     if not compound_name or str(compound_name).strip() in ('-', '', 'nan', 'NaN'):
         return "NOT_FOUND"
 
-    name = str(compound_name).strip()
+    # 解析出第一个合法名称
+    first_name = _parse_first_name(compound_name)
+    if not first_name:
+        return "NOT_FOUND"
 
-    # 1. 精确查询
-    url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(name)}/property/IsomericSMILES/JSON"
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', 'NOT_FOUND')
-            return smiles if smiles else "NOT_FOUND"
-    except Exception:
-        pass
+    # 查询用名称列表（按优先级）
+    names_to_try = []
+    q_name = _name_to_query(first_name)
+    if q_name and q_name != first_name:
+        names_to_try.append(q_name)  # 处理后的优先
+    names_to_try.append(first_name)   # 原始次之
 
-    # 2. 模糊匹配
-    fuzzy_url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
-    try:
-        resp = requests.get(fuzzy_url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', 'NOT_FOUND')
-            return smiles if smiles else "NOT_FOUND"
-    except Exception:
-        pass
-
-    # 3. CAS 号查询
-    if re.match(r'^\d+-\d+-\d+$', name):
-        cas_url = f"{_PUBCHEM_BASE}/compound/cas/{name}/property/IsomericSMILES/JSON"
+    for name in names_to_try:
+        if not name:
+            continue
+        # 1. 精确查询
+        url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(name)}/property/IsomericSMILES/JSON"
         try:
-            resp = requests.get(cas_url, timeout=10)
+            resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
-                smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', 'NOT_FOUND')
-                return smiles if smiles else "NOT_FOUND"
+                smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+                if smiles:
+                    return smiles
         except Exception:
             pass
+
+        # 2. 模糊匹配
+        fuzzy_url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
+        try:
+            resp = requests.get(fuzzy_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+                if smiles:
+                    return smiles
+        except Exception:
+            pass
+
+        # 3. CAS 号查询
+        if re.match(r'^\d+-\d+-\d+$', name):
+            cas_url = f"{_PUBCHEM_BASE}/compound/cas/{name}/property/IsomericSMILES/JSON"
+            try:
+                resp = requests.get(cas_url, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+                    if smiles:
+                        return smiles
+            except Exception:
+                pass
+
+    return "NOT_FOUND"
+
+
+@st.cache_data(ttl=3600)
+def query_smiles_by_metabolite(metabolite_name: str) -> str:
+    """
+    直接用代谢物名称（Metabolite列）查询 PubChem SMILES。
+    代谢物名称通常是原始化合物名，更接近 PubChem 的标准命名。
+    """
+    if not metabolite_name or str(metabolite_name).strip() in ('-', '', 'nan'):
+        return "NOT_FOUND"
+
+    name = _name_to_query(str(metabolite_name).strip())
+    if not name:
+        return "NOT_FOUND"
+
+    # 尝试精确 + 模糊
+    for query_name in [name, str(metabolite_name).strip()]:
+        for algorithm in ['', '?algorithm=fuzzy']:
+            url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(query_name)}/property/IsomericSMILES/JSON{algorithm}"
+            try:
+                resp = requests.get(url, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+                    if smiles:
+                        return smiles
+            except Exception:
+                pass
 
     return "NOT_FOUND"
 
@@ -77,45 +156,65 @@ def query_smiles_by_name(compound_name: str) -> str:
 def batch_query_smiles(df: pd.DataFrame, name_col: str = 'compound_name',
                        progress_callback=None) -> pd.DataFrame:
     """
-    批量查询 SMILES。
+    批量查询 SMILES，支持双列 fallback：
+    优先用 compound_name 查询，若 NOT_FOUND 再用 Metabolite 列名称查询。
 
     Args:
-        df: 输入 DataFrame
-        name_col: 化合物名列名
+        df: 输入 DataFrame（需含 Metabolite 和 name_col 列）
+        name_col: 化合物名列名（默认 compound_name）
         progress_callback: 回调函数，接收 (current, total)
 
     Returns:
-        新增 SMILES 列的 DataFrame
+        新增 SMILES 和 SMILES_Source 列的 DataFrame
     """
     result_df = df.copy()
     if 'SMILES' not in result_df.columns:
-        result_df['SMILES'] = 'NOT_IN_DATA'
+        result_df['SMILES'] = 'PENDING'
+    if 'SMILES_Source' not in result_df.columns:
+        result_df['SMILES_Source'] = ''
 
-    # 预过滤：跳过无效名称
     invalid_vals = {None, '', '-', 'nan', 'NaN', 'Na', 'NULL'}
     n_total = len(result_df)
 
     for i, (_, row) in enumerate(result_df.iterrows()):
-        name = row.get(name_col, None)
-        # 跳过无效名称
-        if str(name).strip() in invalid_vals or pd.isna(name):
-            result_df.at[_, 'SMILES'] = 'NO_NAME'
+        smiles_col = row.get('SMILES', '')
+        # 已有有效 SMILES 且非占位符则跳过
+        if smiles_col and smiles_col not in ('PENDING', 'NOT_IN_DATA', 'NO_NAME', 'NOT_FOUND'):
             if progress_callback:
                 progress_callback(i + 1, n_total)
             continue
 
-        # 已有有效结果则跳过
-        cur = result_df.at[_, 'SMILES']
-        if cur not in ('PENDING', 'NOT_IN_DATA', 'NO_NAME'):
-            if progress_callback:
-                progress_callback(i + 1, n_total)
-            continue
+        metab = str(row.get('Metabolite', '')).strip()
+        name = str(row.get(name_col, '')).strip()
 
-        smiles = query_smiles_by_name(str(name).strip())
+        smiles = 'NOT_FOUND'
+        source = ''
+
+        # 策略1：compound_name 有效 → 优先查它
+        if name and name not in invalid_vals and not pd.isna(row.get(name_col)):
+            smiles = query_smiles_by_name(name)
+            source = 'compound_name'
+            time.sleep(0.3)
+
+        # 策略2：compound_name 无效 或 NOT_FOUND → 用 Metabolite 名称
+        if smiles == 'NOT_FOUND' and metab and metab not in invalid_vals:
+            smiles = query_smiles_by_metabolite(metab)
+            source = 'Metabolite'
+            time.sleep(0.3)
+
+        if not smiles or smiles == 'NOT_FOUND':
+            # 两者都查不到 → 标记
+            if not name or name in invalid_vals:
+                smiles = 'NO_NAME'
+                source = 'no_input'
+            else:
+                smiles = 'NOT_FOUND'
+                source = source or 'not_found'
+
         result_df.at[_, 'SMILES'] = smiles
+        result_df.at[_, 'SMILES_Source'] = source
         if progress_callback:
             progress_callback(i + 1, n_total)
-        time.sleep(0.3)  # 避免对 PubChem 请求过快
 
     return result_df
 
