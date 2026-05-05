@@ -1,15 +1,24 @@
 # -*- coding: utf-8 -*-
 """
 网络药理学模块 - SMILES查询 / SwissTargetPrediction靶点预测 / gseapy富集分析
-依赖: requests, gseapy, pandas, numpy, streamlit (st.cache_data)
+依赖: gseapy, pandas, numpy; PubChem API调用使用标准库 urllib（无需 requests）
 """
 
 import time
 import re
-import requests
+import json
+from urllib.request import urlopen, Request
+from urllib.parse import quote
+from urllib.error import URLError, HTTPError
 import pandas as pd
 import numpy as np
-import streamlit as st
+
+try:
+    import streamlit as st
+    _ST_AVAILABLE = True
+except ImportError:
+    _ST_AVAILABLE = False
+    st = None
 
 # ===================== 常量 =====================
 _PUBCHEM_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
@@ -17,6 +26,50 @@ _ST_BASE = "https://www.swisstargetprediction.ch/api"
 _REQUEST_DELAY = 1.2  # SwissTargetPrediction 请求间隔（秒）
 _MAX_RETRIES = 3     # SwissTargetPrediction 重试次数
 _PROB_THRESHOLD = 0.01  # 靶点预测概率阈值
+
+# ===================== 通用 HTTP 工具（urllib，不依赖 requests）=====================
+
+def _http_get_json(url: str, timeout: int = 15) -> dict:
+    """
+    用 urllib GET JSON，替代 requests.get().json()。
+    兼容 Python 内置库，不依赖 requests。
+    """
+    try:
+        req = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, OSError) as e:
+        return {"_error": str(e)}
+
+
+def _http_post_json(url: str, payload: dict, timeout: int = 30) -> dict:
+    """用 urllib POST JSON"""
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = Request(url, data=data, headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        })
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, OSError) as e:
+        return {"_error": str(e)}
+
+# ===================== 缓存 =====================
+
+# 简单的内存缓存（替代 st.cache_data，兼容非 Streamlit 环境）
+_smiles_cache = {}
+_cache_max_size = 2000
+
+
+def _smiles_cached(key: str, fn, *args):
+    if key in _smiles_cache:
+        return _smiles_cache[key]
+    result = fn(*args)
+    if len(_smiles_cache) < _cache_max_size:
+        _smiles_cache[key] = result
+    return result
 
 # ===================== SMILES 查询 =====================
 
@@ -53,11 +106,7 @@ def _name_to_query(name: str) -> str:
 def query_smiles_by_name(compound_name: str) -> str:
     """
     通过 PubChem REST API 按化合物名称查询 SMILES。
-    支持多策略 fallback：
-      1. 精确查询（处理过的名称）
-      2. fuzzy 模糊匹配
-      3. CAS 号查询（格式如 117-39-5）
-      4. 原始名称（不经处理直接查）
+    使用 urllib（Python 内置），不依赖 requests。
 
     Args:
         compound_name: 原始化合物名称
@@ -77,57 +126,53 @@ def query_smiles_by_name(compound_name: str) -> str:
     names_to_try = []
     q_name = _name_to_query(first_name)
     if q_name and q_name != first_name:
-        names_to_try.append(q_name)  # 处理后的优先
-    names_to_try.append(first_name)   # 原始次之
+        names_to_try.append(q_name)
+    names_to_try.append(first_name)
 
     for name in names_to_try:
         if not name:
             continue
+
         # 1. 精确查询
-        url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(name)}/property/IsomericSMILES/JSON"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+        url = f"{_PUBCHEM_BASE}/compound/name/{quote(name)}/property/IsomericSMILES/JSON"
+        result = _http_get_json(url)
+        if "_error" not in result:
+            try:
+                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
                 if smiles:
                     return smiles
-        except Exception:
-            pass
+            except (KeyError, IndexError, TypeError):
+                pass
 
         # 2. 模糊匹配
-        fuzzy_url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
-        try:
-            resp = requests.get(fuzzy_url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+        url_fuzzy = f"{_PUBCHEM_BASE}/compound/name/{quote(name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
+        result = _http_get_json(url_fuzzy)
+        if "_error" not in result:
+            try:
+                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
                 if smiles:
                     return smiles
-        except Exception:
-            pass
+            except (KeyError, IndexError, TypeError):
+                pass
 
         # 3. CAS 号查询
         if re.match(r'^\d+-\d+-\d+$', name):
             cas_url = f"{_PUBCHEM_BASE}/compound/cas/{name}/property/IsomericSMILES/JSON"
-            try:
-                resp = requests.get(cas_url, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+            result = _http_get_json(cas_url)
+            if "_error" not in result:
+                try:
+                    smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
                     if smiles:
                         return smiles
-            except Exception:
-                pass
+                except (KeyError, IndexError, TypeError):
+                    pass
 
     return "NOT_FOUND"
 
 
-@st.cache_data(ttl=3600)
 def query_smiles_by_metabolite(metabolite_name: str) -> str:
     """
     直接用代谢物名称（Metabolite列）查询 PubChem SMILES。
-    代谢物名称通常是原始化合物名，更接近 PubChem 的标准命名。
     """
     if not metabolite_name or str(metabolite_name).strip() in ('-', '', 'nan'):
         return "NOT_FOUND"
@@ -136,18 +181,29 @@ def query_smiles_by_metabolite(metabolite_name: str) -> str:
     if not name:
         return "NOT_FOUND"
 
-    # 尝试精确 + 模糊
-    for query_name in [name, str(metabolite_name).strip()]:
-        for algorithm in ['', '?algorithm=fuzzy']:
-            url = f"{_PUBCHEM_BASE}/compound/name/{requests.utils.quote(query_name)}/property/IsomericSMILES/JSON{algorithm}"
+    names_to_try = [name, str(metabolite_name).strip()]
+
+    for query_name in names_to_try:
+        # 精确
+        url = f"{_PUBCHEM_BASE}/compound/name/{quote(query_name)}/property/IsomericSMILES/JSON"
+        result = _http_get_json(url)
+        if "_error" not in result:
             try:
-                resp = requests.get(url, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    smiles = data['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
-                    if smiles:
-                        return smiles
-            except Exception:
+                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+                if smiles:
+                    return smiles
+            except (KeyError, IndexError, TypeError):
+                pass
+
+        # 模糊
+        url_fuzzy = f"{_PUBCHEM_BASE}/compound/name/{quote(query_name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
+        result = _http_get_json(url_fuzzy)
+        if "_error" not in result:
+            try:
+                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
+                if smiles:
+                    return smiles
+            except (KeyError, IndexError, TypeError):
                 pass
 
     return "NOT_FOUND"
@@ -242,18 +298,17 @@ def query_swiss_target_prediction(smiles: str, species: str = "Homo sapiens",
 
     url = f"{_ST_BASE}/search"
     payload = {"smiles": smiles, "species": species}
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
     for attempt in range(max_retries + 1):
-        try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
-                results = data.get('Results', [])
+        result = _http_post_json(url, payload, timeout=30)
+        err = result.get("_error", "")
+
+        if not err:
+            try:
+                results = result.get('Results', [])
                 filtered = [r for r in results if float(r.get('Probability', 0)) > _PROB_THRESHOLD]
                 genes = []
                 for r in filtered:
-                    # SwissTargetPrediction 返回字段: Target, Gene, Probability
                     for key in ('Gene', 'Target', 'Symbol'):
                         g = r.get(key, '')
                         if g:
@@ -262,19 +317,22 @@ def query_swiss_target_prediction(smiles: str, species: str = "Homo sapiens",
                 genes = sorted(set(g for g in genes if g))
                 genes_str = ";".join(genes)
                 return genes_str, len(genes), ""
-            elif resp.status_code == 429:
-                wait_time = 2 ** attempt + 1
-                time.sleep(wait_time)
-                continue
-            else:
-                return "ERROR", 0, f"HTTP {resp.status_code}"
-        except requests.exceptions.Timeout:
+            except (KeyError, ValueError, TypeError) as e:
+                return "ERROR", 0, f"Parse error: {e}"
+
+        # 处理错误
+        if "429" in err or "429" in str(result):
+            wait_time = 2 ** attempt + 1
+            time.sleep(wait_time)
+            continue
+        elif "timeout" in err.lower() or "timed out" in err.lower():
             if attempt < max_retries:
                 time.sleep(2)
                 continue
             return "ERROR", 0, "Timeout"
-        except Exception as e:
-            return "ERROR", 0, str(e)
+        else:
+            return "ERROR", 0, err
+
     return "ERROR", 0, "Max retries exceeded"
 
 

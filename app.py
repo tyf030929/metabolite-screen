@@ -1633,6 +1633,52 @@ def main():
 
         with tab9:
             st.subheader("🧬 Network Pharmacology — SMILES / Target Prediction / Enrichment")
+
+            # ===== 诊断区块 =====
+            with st.expander("🔍 环境诊断（点击展开）"):
+                diag_col1, diag_col2 = st.columns(2)
+                with diag_col1:
+                    st.markdown("**模块导入状态**")
+                    if query_smiles_by_name is not None:
+                        st.success("✅ network_pharma 导入成功")
+                    else:
+                        st.error("❌ network_pharma 模块导入失败（检查 network_pharma.py 是否存在）")
+                    try:
+                        import requests as _req
+                        st.success(f"✅ requests 可用: {_req.__version__}")
+                    except ImportError:
+                        st.error("❌ requests 未安装（请在 requirements.txt 加入 requests>=2.31.0）")
+                    try:
+                        import gseapy as _gp
+                        st.success(f"✅ gseapy 可用: {_gp.__version__}")
+                    except ImportError:
+                        st.warning("⚠️ gseapy 未安装（富集分析将不可用）")
+                with diag_col2:
+                    st.markdown("**PubChem API 连通性**")
+                    try:
+                        import requests as _req
+                        test_resp = _req.get("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/Quercetin/property/IsomericSMILES/JSON", timeout=10)
+                        if test_resp.status_code == 200:
+                            sm = test_resp.json()['PropertyTable']['Properties'][0]['IsomericSMILES']
+                            st.success(f"✅ API 正常，Quercetin SMILES: `{sm}`")
+                        else:
+                            st.error(f"❌ API 返回状态码: {test_resp.status_code}")
+                    except Exception as _e:
+                        st.error(f"❌ API 请求失败: {_e}")
+
+                st.markdown("**测试 query_smiles_by_name 函数**")
+                test_name = st.text_input("输入一个化合物名测试", value="Quercetin", key="diag_test_name")
+                if st.button("运行诊断测试", key="diag_test_btn"):
+                    if query_smiles_by_name is None:
+                        st.error("query_smiles_by_name 未定义，模块导入失败")
+                    else:
+                        with st.spinner("测试中..."):
+                            result = query_smiles_by_name(test_name)
+                        if result and result != "NOT_FOUND":
+                            st.success(f"✅ 查询成功！SMILES: `{result}`")
+                        else:
+                            st.warning(f"❌ 查询失败，返回: `{result}`（请检查上方 API 连通性）")
+
             if query_smiles_by_name is None:
                 st.error("network_pharma 模块未正确加载，请检查 network_pharma.py 是否与 app.py 在同一目录。")
             else:
