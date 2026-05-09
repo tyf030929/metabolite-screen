@@ -1632,599 +1632,600 @@ def main():
                             st.download_button("Download Multi-Group Analysis Results", data=dl_bytes, file_name="multi_group_comparison_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         with tab9:
-            st.subheader("🧬 Network Pharmacology — SMILES / Target Prediction / Enrichment")
+    st.subheader("🧬 Network Pharmacology — SMILES / Target Prediction / Enrichment")
 
-            # ===== 诊断区块 =====
-            with st.expander("🔍 环境诊断（点击展开）"):
-                diag_results = {}
-                try:
-                    from network_pharma import check_network_connectivity, _has_curl
-                    diag_results = check_network_connectivity()
-                except Exception as e:
-                    st.error(f"诊断函数加载失败: {e}")
+    # ===== 诊断区块 =====
+    with st.expander("🔍 环境诊断（点击展开）"):
+        diag_results = {}
+        try:
+            from network_pharma import check_network_connectivity, _has_curl
+            diag_results = check_network_connectivity()
+        except Exception as e:
+            st.error(f"诊断函数加载失败: {e}")
 
-                diag_col1, diag_col2 = st.columns(2)
-                with diag_col1:
-                    dns = diag_results.get("dns", "未知")
-                    if "OK" in str(dns):
-                        st.success(f"✅ DNS 解析: {dns}")
-                    else:
-                        st.error(f"❌ DNS 解析失败: {dns}")
-                        st.info("DNS 失败说明云端环境无法解析外部域名，这是根本问题")
-
-                    http = diag_results.get("http", "未知")
-                    if "OK" in str(http):
-                        st.success(f"✅ PubChem API: {http}")
-                    else:
-                        st.error(f"❌ PubChem API: {http}")
-                        st.info("如果 DNS OK 但 HTTP FAIL，说明域名解析到了但连接被平台拦截")
-
-                with diag_col2:
-                    curl_avail = False
-                    try:
-                        from network_pharma import _has_curl
-                        curl_avail = _has_curl
-                    except:
-                        pass
-
-                    if curl_avail:
-                        st.success("✅ curl 可用（API fallback 通道正常）")
-                    else:
-                        st.warning("⚠️ curl 不可用，仅依赖 urllib")
-
-                    swiss_d = diag_results.get("swiss", "未知")
-                    if "OK" in str(swiss_d):
-                        st.success(f"✅ SwissTargetPrediction: 可连通")
-                    else:
-                        st.error(f"❌ SwissTargetPrediction: {swiss_d}")
-
-                st.markdown("**模块导入状态**")
-                mod_col1, mod_col2 = st.columns(2)
-                with mod_col1:
-                    if query_smiles_by_name is not None:
-                        st.success("✅ network_pharma 模块导入成功")
-                    else:
-                        st.error("❌ network_pharma 模块导入失败（检查文件是否上传）")
-                with mod_col2:
-                    try:
-                        import gseapy
-                        st.success(f"✅ gseapy 可用: {gseapy.__version__}")
-                    except ImportError:
-                        st.warning("⚠️ gseapy 未安装（富集分析不可用）")
-
-                if "FAIL" in str(diag_results.get("dns", "")):
-                    st.error(
-                        "**⚠️ 根本原因：云端环境无法解析外部 DNS。**\n\n"
-                        "这说明 Streamlit Cloud / 部署平台禁止了对外网访问。\n\n"
-                        "**解决方案**：\n"
-                        "1. 在 Streamlit Cloud 的 App Settings → Secrets 中检查网络策略\n"
-                        "2. 改用 **本地部署**（`streamlit run app.py`）即可正常访问 PubChem\n"
-                        "3. 或切换到允许网络访问的部署平台（如 Modal、Railway、HuggingFace Spaces）"
-                    )
-
-            if query_smiles_by_name is None:
-                st.error("network_pharma 模块未正确加载，请检查 network_pharma.py 是否与 app.py 在同一目录。")
+        diag_col1, diag_col2 = st.columns(2)
+        with diag_col1:
+            dns = diag_results.get("dns", "未知")
+            if "OK" in str(dns):
+                st.success(f"✅ DNS 解析: {dns}")
             else:
-                # ===== ① SMILES 数据库 + PubChem 查询 =====
-                st.markdown("### ① 本地 SMILES 数据库 + PubChem 查询")
+                st.error(f"❌ DNS 解析失败: {dns}")
+                st.info("DNS 失败说明云端环境无法解析外部域名，这是根本问题")
 
-                # 本地数据库状态
-                try:
-                    from network_pharma import db_get_stats
-                    stats = db_get_stats()
-                    if "error" not in stats:
-                        c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("compound_name 记录", stats.get("compound_name_records", 0))
-                        c2.metric("metabolite 记录", stats.get("metabolite_name_records", 0))
-                        c3.metric("API 查询日志", stats.get("api_log_entries", 0))
-                        c4.metric("数据库大小", f"{stats.get('db_file_size_mb', 0)} MB")
-                except Exception as e:
-                    st.warning(f"本地数据库未初始化: {e}")
+            http = diag_results.get("http", "未知")
+            if "OK" in str(http):
+                st.success(f"✅ PubChem API: {http}")
+            else:
+                st.error(f"❌ PubChem API: {http}")
+                st.info("如果 DNS OK 但 HTTP FAIL，说明域名解析到了但连接被平台拦截")
 
-                # CSV 导入
-                with st.expander("📁 导入本地 SMILES 数据库（CSV/Excel）"):
-                    st.caption("上传包含 name(化合物名) 和 smiles 列的文件，批量导入本地 SQLite 数据库")
-                    uploaded_db = st.file_uploader(
-                        "选择 CSV 或 Excel 文件",
-                        type=['csv', 'xlsx', 'xls'],
-                        key="smiles_db_upload"
-                    )
-                    if uploaded_db:
-                        if st.button("导入到本地数据库", key="import_smiles_btn"):
-                            import tempfile as _tmp, os as _os
-                            try:
-                                from network_pharma import import_smiles_from_csv
-                                if uploaded_db.name.endswith('.csv') or uploaded_db.name.endswith('.tsv'):
-                                    sep = '\t' if uploaded_db.name.endswith('.tsv') else ','
-                                    import io as _io
-                                    df_temp = pd.read_csv(_io.TextIOWrapper(uploaded_db, encoding='utf-8'), sep=sep)
-                                else:
-                                    df_temp = pd.read_excel(uploaded_db)
-                                tmp_path = _os.path.join(_tmp.gettempdir(), uploaded_db.name)
-                                df_temp.to_csv(tmp_path, index=False)
-                                n = import_smiles_from_csv(tmp_path,
-                                                            name_col=df_temp.columns[0],
-                                                            smiles_col=df_temp.columns[1])
-                                st.success(f"成功导入 {n} 条记录到本地数据库！")
-                            except Exception as _e:
-                                st.error(f"导入失败: {_e}")
+        with diag_col2:
+            curl_avail = False
+            try:
+                from network_pharma import _has_curl
+                curl_avail = _has_curl
+            except:
+                pass
 
-                st.markdown("---")
-                st.markdown("**🔍 单个化合物查询**")
-                sm_name = st.text_input(
-                    "输入化合物名称或 CAS 号",
-                    placeholder="例如：Quercetin、117-39-5、Aspirin",
-                    key="sm_single_name"
-                )
-                if st.button("查询 SMILES", type="primary", key="sm_single_btn"):
-                    if not sm_name.strip():
-                        st.warning("请输入化合物名称")
-                    else:
-                        with st.spinner("查询中（本地数据库 → API）..."):
-                            from network_pharma import db_query_compound_with_fallback
-                            sm, source, via = db_query_compound_with_fallback(sm_name.strip(), "")
-                        if sm and sm not in ("NOT_FOUND", ""):
-                            src_label = "✅ 本地数据库命中" if source == "local_db" else "🌐 PubChem API 查询"
-                            st.success(f"{src_label} | 查询方式: {via}")
-                            st.code(sm, language="text")
+            if curl_avail:
+                st.success("✅ curl 可用（API fallback 通道正常）")
+            else:
+                st.warning("⚠️ curl 不可用，仅依赖 urllib")
+
+            swiss_d = diag_results.get("swiss", "未知")
+            if "OK" in str(swiss_d):
+                st.success(f"✅ SwissTargetPrediction: 可连通")
+            else:
+                st.error(f"❌ SwissTargetPrediction: {swiss_d}")
+
+        st.markdown("**模块导入状态**")
+        mod_col1, mod_col2 = st.columns(2)
+        with mod_col1:
+            if query_smiles_by_name is not None:
+                st.success("✅ network_pharma 模块导入成功")
+            else:
+                st.error("❌ network_pharma 模块导入失败（检查文件是否上传）")
+        with mod_col2:
+            try:
+                import gseapy
+                st.success(f"✅ gseapy 可用: {gseapy.__version__}")
+            except ImportError:
+                st.warning("⚠️ gseapy 未安装（富集分析不可用）")
+
+        if "FAIL" in str(diag_results.get("dns", "")):
+            st.error(
+                "**⚠️ 根本原因：云端环境无法解析外部 DNS。**\n\n"
+                "这说明 Streamlit Cloud / 部署平台禁止了对外网访问。\n\n"
+                "**解决方案**：\n"
+                "1. 在 Streamlit Cloud 的 App Settings → Secrets 中检查网络策略\n"
+                "2. 改用 **本地部署**（`streamlit run app.py`）即可正常访问 PubChem\n"
+                "3. 或切换到允许网络访问的部署平台（如 Modal、Railway、HuggingFace Spaces）"
+            )
+
+    if query_smiles_by_name is None:
+        st.error("network_pharma 模块未正确加载，请检查 network_pharma.py 是否与 app.py 在同一目录。")
+    else:
+        # ===== ① SMILES 数据库 + PubChem 查询 =====
+        st.markdown("### ① 本地 SMILES 数据库 + PubChem 查询")
+
+        # 本地数据库状态
+        try:
+            from network_pharma import db_get_stats
+            stats = db_get_stats()
+            if "error" not in stats:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("compound_name 记录", stats.get("compound_name_records", 0))
+                c2.metric("metabolite 记录", stats.get("metabolite_name_records", 0))
+                c3.metric("API 查询日志", stats.get("api_log_entries", 0))
+                c4.metric("数据库大小", f"{stats.get('db_file_size_mb', 0)} MB")
+        except Exception as e:
+            st.warning(f"本地数据库未初始化: {e}")
+
+        # CSV 导入
+        with st.expander("📁 导入本地 SMILES 数据库（CSV/Excel）"):
+            st.caption("上传包含 name(化合物名) 和 smiles 列的文件，批量导入本地 SQLite 数据库")
+            uploaded_db = st.file_uploader(
+                "选择 CSV 或 Excel 文件",
+                type=['csv', 'xlsx', 'xls'],
+                key="smiles_db_upload"
+            )
+            if uploaded_db:
+                if st.button("导入到本地数据库", key="import_smiles_btn"):
+                    import tempfile as _tmp, os as _os
+                    try:
+                        from network_pharma import import_smiles_from_csv
+                        if uploaded_db.name.endswith('.csv') or uploaded_db.name.endswith('.tsv'):
+                            sep = '\t' if uploaded_db.name.endswith('.tsv') else ','
+                            import io as _io
+                            df_temp = pd.read_csv(_io.TextIOWrapper(uploaded_db, encoding='utf-8'), sep=sep)
                         else:
-                            st.warning("未找到该化合物的 SMILES，请尝试其他名称")
+                            df_temp = pd.read_excel(uploaded_db)
+                        tmp_path = _os.path.join(_tmp.gettempdir(), uploaded_db.name)
+                        df_temp.to_csv(tmp_path, index=False)
+                        n = import_smiles_from_csv(tmp_path,
+                                                    name_col=df_temp.columns[0],
+                                                    smiles_col=df_temp.columns[1])
+                        st.success(f"成功导入 {n} 条记录到本地数据库！")
+                    except Exception as _e:
+                        st.error(f"导入失败: {_e}")
 
-                st.markdown("---")
-                st.markdown("**⭐ 批量 SMILES 查询 — Top 20 Star Molecules**")
-                col_s1, col_s2 = st.columns([1, 1])
-                with col_s1:
-                    top20_btn = st.button(
-                        "⭐ 查询 Top 20 Star Molecules 的 SMILES",
-                        type="primary",
-                        help="取 Star Molecules 列表中综合评分最高的前 20 个"
+        st.markdown("---")
+        st.markdown("**🔍 单个化合物查询**")
+        sm_name = st.text_input(
+            "输入化合物名称或 CAS 号",
+            placeholder="例如：Quercetin、117-39-5、Aspirin",
+            key="sm_single_name"
+        )
+        if st.button("查询 SMILES", type="primary", key="sm_single_btn"):
+            if not sm_name.strip():
+                st.warning("请输入化合物名称")
+            else:
+                with st.spinner("查询中（本地数据库 → API）..."):
+                    from network_pharma import db_query_compound_with_fallback
+                    sm, source, via = db_query_compound_with_fallback(sm_name.strip(), "")
+                if sm and sm not in ("NOT_FOUND", ""):
+                    src_label = "✅ 本地数据库命中" if source == "local_db" else "🌐 PubChem API 查询"
+                    st.success(f"{src_label} | 查询方式: {via}")
+                    st.code(sm, language="text")
+                else:
+                    st.warning("未找到该化合物的 SMILES，请尝试其他名称")
+
+        st.markdown("---")
+        st.markdown("**⭐ 批量 SMILES 查询 — Top 20 Star Molecules**")
+        col_s1, col_s2 = st.columns([1, 1])
+        with col_s1:
+            top20_btn = st.button(
+                "⭐ 查询 Top 20 Star Molecules 的 SMILES",
+                type="primary",
+                help="取 Star Molecules 列表中综合评分最高的前 20 个"
+            )
+        with col_s2:
+            all_btn = st.button(
+                "查询所有药理候选化合物的 SMILES",
+                type="secondary"
+            )
+
+        target_df_for_query = None
+        query_label = ""
+
+        if top20_btn:
+            if st.session_state.get('star_df') is None and st.session_state.get('star_df_v2') is None:
+                st.warning("请先在侧边栏运行分析，生成 Star Molecules 列表")
+            else:
+                sdf = st.session_state.get('star_df_v2') or st.session_state.get('star_df')
+                top20 = sdf.head(20).copy()
+                if st.session_state.get('pharma_df') is not None:
+                    name_map = st.session_state['pharma_df'].set_index('Metabolite')['compound_name'].to_dict()
+                    top20['compound_name'] = top20['Metabolite'].map(name_map).fillna('-')
+                target_df_for_query = top20
+                query_label = "Top 20 Star Molecules"
+                st.info(f"将对 {len(top20)} 个 Star Molecule 进行 SMILES 查询")
+
+        if all_btn:
+            if st.session_state.get('pharma_df') is None:
+                st.warning("请先在侧边栏运行分析")
+            else:
+                target_df_for_query = st.session_state['pharma_df'].copy()
+                query_label = f"全部 {len(target_df_for_query)} 个候选化合物"
+
+        if target_df_for_query is not None:
+            progress_bar = st.progress(0)
+            def pg_cb(cur, tot):
+                progress_bar.progress(int(cur / tot * 100))
+            df_out = batch_query_smiles(target_df_for_query,
+                                        name_col='compound_name',
+                                        progress_callback=pg_cb)
+            progress_bar.empty()
+
+            total = len(df_out)
+            valid_mask = df_out['SMILES'].apply(
+                lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING', '')
+            )
+            sm_found = valid_mask.sum()
+            sm_no_name = (df_out['SMILES'] == 'NO_NAME').sum()
+            sm_not_found = (df_out['SMILES'] == 'NOT_FOUND').sum()
+            src_local = ((df_out['SMILES_Source'] == 'local_db') & valid_mask).sum()
+            src_api = ((df_out['SMILES_Source'] == 'pubchem_api') & valid_mask).sum()
+
+            st.success(
+                f"查询完成！找到 SMILES: **{sm_found}/{total}** "
+                f"（本地缓存: {src_local}，API查询: {src_api}，"
+                f"无名称跳过: {sm_no_name}，仍未找到: {sm_not_found}）"
+            )
+
+            found_df = df_out[valid_mask].copy()
+            if len(found_df) > 0:
+                st.markdown("**✅ 已找到 SMILES**")
+                disp_cols = ['Metabolite', 'compound_name', 'SMILES', 'SMILES_Source']
+                st.dataframe(found_df[disp_cols].head(50), height=400)
+
+            not_found_df = df_out[df_out['SMILES'] == 'NOT_FOUND'].copy()
+            if len(not_found_df) > 0 and len(not_found_df) <= 50:
+                st.markdown(f"**❌ 仍未找到（{len(not_found_df)} 个）**")
+                st.dataframe(
+                    not_found_df[['Metabolite', 'compound_name', 'SMILES_Source']].head(20),
+                    height=min(300, 20 * 35)
+                )
+
+            st.session_state['smiles_df'] = found_df
+            st.session_state['smiles_all_df'] = df_out
+
+            b = io.BytesIO()
+            with pd.ExcelWriter(b, engine='openpyxl') as w:
+                df_out[['Metabolite', 'compound_name', 'SMILES', 'SMILES_Source']].to_excel(
+                    w, index=False, sheet_name='SMILES'
+                )
+            b.seek(0)
+            st.download_button(
+                f"Download SMILES Results（{query_label}）",
+                data=b.getvalue(),
+                file_name="smiles_query_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        # ====== ② SwissTargetPrediction ======
+        st.markdown("---")
+        st.markdown("### ② SwissTargetPrediction 靶点预测")
+        st.caption("输入 SMILES，自动预测人类靶点基因（Probability > 0.01）。每个 SMILES 约需 1-2 秒。")
+        st_smiles = st.text_area(
+            "输入 SMILES（支持批量，每行一个）",
+            placeholder="CC1=CC=C(C=C1)C2=CC(=NN2C=3C=C(C=C3)C4=CC=CC=C4)C5=CC=CC=C5\nCC(O)=O",
+            key="st_smiles_input"
+        )
+        if st.button("预测靶点", type="primary", key="st_predict_btn"):
+            if not st_smiles.strip():
+                st.warning("请输入至少一个 SMILES")
+            else:
+                smiles_list = [s.strip() for s in st_smiles.strip().split('\n') if s.strip()]
+                results = []
+                bar = st.progress(0)
+                for i, sm in enumerate(smiles_list):
+                    genes, cnt, err = query_swiss_target_prediction(sm)
+                    results.append({
+                        'SMILES': sm, 'Predicted_Targets': genes,
+                        'Target_Count': cnt, 'Error': err
+                    })
+                    bar.progress(int((i+1)/len(smiles_list)*100))
+                bar.empty()
+                res_df = pd.DataFrame(results)
+                st.session_state['target_df'] = res_df
+                st.success(f"完成！{len(results)} 个化合物中有靶点记录: {(res_df['Target_Count']>0).sum()}")
+                st.dataframe(res_df, height=300)
+                b = io.BytesIO()
+                with pd.ExcelWriter(b, engine='openpyxl') as w:
+                    res_df.to_excel(w, index=False, sheet_name='Targets')
+                b.seek(0)
+                st.download_button(
+                    "Download Target Prediction",
+                    data=b.getvalue(),
+                    file_name="swiss_target_prediction.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        st.markdown("---")
+        st.markdown("#### 批量预测（基于 SMILES 查询结果）")
+        if st.button("对 SMILES 查询结果批量预测靶点", type="secondary", key="batch_target_btn"):
+            if st.session_state.get('smiles_df') is None or len(st.session_state.get('smiles_df', [])) == 0:
+                st.warning("请先运行 ① SMILES 查询生成数据")
+            else:
+                df_in = st.session_state['smiles_df'].copy()
+                df_in = df_in[df_in['SMILES'].notna() &
+                               (df_in['SMILES'] != 'NOT_FOUND') &
+                               (df_in['SMILES'] != 'PENDING') &
+                               (df_in['SMILES'] != '')]
+                if len(df_in) == 0:
+                    st.warning("没有有效的 SMILES 可供预测")
+                else:
+                    progress_bar2 = st.progress(0)
+                    def pg_cb2(cur, tot):
+                        progress_bar2.progress(int(cur/tot*100))
+                    df_out, errs = batch_swiss_target_prediction(
+                        df_in, smiles_col='SMILES', progress_callback=pg_cb2
                     )
-                with col_s2:
-                    all_btn = st.button(
-                        "查询所有药理候选化合物的 SMILES",
-                        type="secondary"
-                    )
-
-                target_df_for_query = None
-                query_label = ""
-
-                if top20_btn:
-                    if st.session_state.get('star_df') is None and st.session_state.get('star_df_v2') is None:
-                        st.warning("请先在侧边栏运行分析，生成 Star Molecules 列表")
-                    else:
-                        sdf = st.session_state.get('star_df_v2') or st.session_state.get('star_df')
-                        top20 = sdf.head(20).copy()
-                        if st.session_state.get('pharma_df') is not None:
-                            name_map = st.session_state['pharma_df'].set_index('Metabolite')['compound_name'].to_dict()
-                            top20['compound_name'] = top20['Metabolite'].map(name_map).fillna('-')
-                        target_df_for_query = top20
-                        query_label = "Top 20 Star Molecules"
-                        st.info(f"将对 {len(top20)} 个 Star Molecule 进行 SMILES 查询")
-
-                if all_btn:
-                    if st.session_state.get('pharma_df') is None:
-                        st.warning("请先在侧边栏运行分析")
-                    else:
-                        target_df_for_query = st.session_state['pharma_df'].copy()
-                        query_label = f"全部 {len(target_df_for_query)} 个候选化合物"
-
-                if target_df_for_query is not None:
-                    progress_bar = st.progress(0)
-                    def pg_cb(cur, tot):
-                        progress_bar.progress(int(cur / tot * 100))
-                    df_out = batch_query_smiles(target_df_for_query,
-                                                name_col='compound_name',
-                                                progress_callback=pg_cb)
-                    progress_bar.empty()
-
-                    total = len(df_out)
-                    valid_mask = df_out['SMILES'].apply(
-                        lambda x: x not in ('NOT_FOUND', 'NO_NAME', 'NOT_IN_DATA', 'PENDING', '')
-                    )
-                    sm_found = valid_mask.sum()
-                    sm_no_name = (df_out['SMILES'] == 'NO_NAME').sum()
-                    sm_not_found = (df_out['SMILES'] == 'NOT_FOUND').sum()
-                    src_local = ((df_out['SMILES_Source'] == 'local_db') & valid_mask).sum()
-                    src_api = ((df_out['SMILES_Source'] == 'pubchem_api') & valid_mask).sum()
-
-                    st.success(
-                        f"查询完成！找到 SMILES: **{sm_found}/{total}** "
-                        f"（本地缓存: {src_local}，API查询: {src_api}，"
-                        f"无名称跳过: {sm_no_name}，仍未找到: {sm_not_found}）"
-                    )
-
-                    found_df = df_out[valid_mask].copy()
-                    if len(found_df) > 0:
-                        st.markdown("**✅ 已找到 SMILES**")
-                        disp_cols = ['Metabolite', 'compound_name', 'SMILES', 'SMILES_Source']
-                        st.dataframe(found_df[disp_cols].head(50), height=400)
-
-                    not_found_df = df_out[df_out['SMILES'] == 'NOT_FOUND'].copy()
-                    if len(not_found_df) > 0 and len(not_found_df) <= 50:
-                        st.markdown(f"**❌ 仍未找到（{len(not_found_df)} 个）**")
-                        st.dataframe(
-                            not_found_df[['Metabolite', 'compound_name', 'SMILES_Source']].head(20),
-                            height=min(300, 20 * 35)
-                        )
-
-                    st.session_state['smiles_df'] = found_df
-                    st.session_state['smiles_all_df'] = df_out
-
+                    progress_bar2.empty()
+                    n_hit = (df_out['Target_Count'] > 0).sum()
+                    st.success(f"完成！{n_hit}/{len(df_out)} 个化合物命中靶点")
+                    if errs:
+                        st.warning(f"出错 {len(errs)} 个")
+                    st.session_state['target_df'] = df_out
+                    disp = df_out[df_out['Target_Count'] > 0][
+                        ['Metabolite', 'SMILES', 'Predicted_Targets', 'Target_Count']
+                    ]
+                    st.dataframe(disp, height=300)
                     b = io.BytesIO()
                     with pd.ExcelWriter(b, engine='openpyxl') as w:
-                        df_out[['Metabolite', 'compound_name', 'SMILES', 'SMILES_Source']].to_excel(
-                            w, index=False, sheet_name='SMILES'
-                        )
+                        df_out.to_excel(w, index=False, sheet_name='Targets')
                     b.seek(0)
                     st.download_button(
-                        f"Download SMILES Results（{query_label}）",
+                        "Download Batch Targets",
                         data=b.getvalue(),
-                        file_name="smiles_query_results.xlsx",
+                        file_name="swiss_target_batch.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
-                # ====== ② SwissTargetPrediction ======
-                st.markdown("---")
-                st.markdown("### ② SwissTargetPrediction 靶点预测")
-                st.caption("输入 SMILES，自动预测人类靶点基因（Probability > 0.01）。每个 SMILES 约需 1-2 秒。")
-                st_smiles = st.text_area(
-                    "输入 SMILES（支持批量，每行一个）",
-                    placeholder="CC1=CC=C(C=C1)C2=CC(=NN2C=3C=C(C=C3)C4=CC=CC=C4)C5=CC=CC=C5\nCC(O)=O",
-                    key="st_smiles_input"
-                )
-                if st.button("预测靶点", type="primary", key="st_predict_btn"):
-                    if not st_smiles.strip():
-                        st.warning("请输入至少一个 SMILES")
-                    else:
-                        smiles_list = [s.strip() for s in st_smiles.strip().split('\n') if s.strip()]
-                        results = []
-                        bar = st.progress(0)
-                        for i, sm in enumerate(smiles_list):
-                            genes, cnt, err = query_swiss_target_prediction(sm)
-                            results.append({
-                                'SMILES': sm, 'Predicted_Targets': genes,
-                                'Target_Count': cnt, 'Error': err
-                            })
-                            bar.progress(int((i+1)/len(smiles_list)*100))
-                        bar.empty()
-                        res_df = pd.DataFrame(results)
-                        st.session_state['target_df'] = res_df
-                        st.success(f"完成！{len(results)} 个化合物中有靶点记录: {(res_df['Target_Count']>0).sum()}")
-                        st.dataframe(res_df, height=300)
-                        b = io.BytesIO()
-                        with pd.ExcelWriter(b, engine='openpyxl') as w:
-                            res_df.to_excel(w, index=False, sheet_name='Targets')
-                        b.seek(0)
-                        st.download_button(
-                            "Download Target Prediction",
-                            data=b.getvalue(),
-                            file_name="swiss_target_prediction.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+        # ====== ③ gseapy 富集分析 ======
+        st.markdown("---")
+        st.markdown("### ③ gseapy 富集分析（KEGG / GO）")
+        st.caption("输入基因列表，自动在 Enrichr 数据库做 KEGG + GO 富集分析（需要网络连接）。")
+        gene_input = st.text_area(
+            "输入基因列表（每行一个，或用分号/逗号分隔）",
+            placeholder="EGFR\nAKT1\nTP53\nVEGFA\nIL6\nTNF",
+            key="gene_input"
+        )
+        col_db1, col_db2 = st.columns(2)
+        with col_db1:
+            organisms = st.selectbox("物种", ["Human", "Mouse", "Rat"], index=0, key="org_select")
+        with col_db2:
+            top_n_enr = st.number_input("每库显示 Top N", 5, 50, 20, key="top_n_enr")
 
-                st.markdown("---")
-                st.markdown("#### 批量预测（基于 SMILES 查询结果）")
-                if st.button("对 SMILES 查询结果批量预测靶点", type="secondary", key="batch_target_btn"):
-                    if st.session_state.get('smiles_df') is None or len(st.session_state.get('smiles_df', [])) == 0:
-                        st.warning("请先运行 ① SMILES 查询生成数据")
-                    else:
-                        df_in = st.session_state['smiles_df'].copy()
-                        df_in = df_in[df_in['SMILES'].notna() &
-                                       (df_in['SMILES'] != 'NOT_FOUND') &
-                                       (df_in['SMILES'] != 'PENDING') &
-                                       (df_in['SMILES'] != '')]
-                        if len(df_in) == 0:
-                            st.warning("没有有效的 SMILES 可供预测")
+        if st.button("运行富集分析", type="primary", key="run_enrich_btn"):
+            if not gene_input.strip():
+                st.warning("请输入基因列表")
+            else:
+                raw = gene_input.replace(';', '\n').replace(',', '\n')
+                genes = [g.strip() for g in raw.split('\n') if g.strip()]
+                if not genes:
+                    st.warning("未能解析有效基因")
+                else:
+                    org_map = {"Human": "human", "Mouse": "mouse", "Rat": "rat"}
+                    with st.spinner(f"正在分析 {len(genes)} 个基因..."):
+                        try:
+                            enr_dict = run_gseapy_enrichment(gene_list=genes, organism=org_map[organisms])
+                            merged = merge_enrichment_results(enr_dict)
+                            st.session_state['enrichment_df'] = merged
+                            if len(merged) == 0:
+                                st.warning("未找到显著富集结果")
+                            else:
+                                st.success(f"富集分析完成，共 {len(merged)} 条结果")
+                                if plot_enrichment_dotplot is not None:
+                                    fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
+                                    if fig:
+                                        st.plotly_chart(fig, width="stretch")
+                                st.dataframe(
+                                    merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
+                                    height=400
+                                )
+                                b = io.BytesIO()
+                                with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                    merged.to_excel(w, index=False, sheet_name='Enrichment')
+                                b.seek(0)
+                                st.download_button(
+                                    "Download Enrichment Results",
+                                    data=b.getvalue(),
+                                    file_name="gseapy_enrichment.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+                        except Exception as e:
+                            st.error(f"富集分析失败: {e}")
+
+        # ---- 一键分析：使用 SwissTargetPrediction 靶点基因 ----
+        st.markdown("---")
+        st.markdown("#### 一键分析：使用 SwissTargetPrediction 靶点基因做富集")
+        if st.button("用当前靶点预测结果做富集分析", type="secondary", key="onekey_enrich_btn"):
+            if st.session_state.get('target_df') is None:
+                st.warning("请先运行 ② SwissTargetPrediction 生成靶点数据")
+            else:
+                all_genes = set()
+                for _, row in st.session_state['target_df'].iterrows():
+                    tg = str(row.get('Predicted_Targets', ''))
+                    if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
+                        for g in tg.split(';'):
+                            g = g.strip()
+                            if g:
+                                all_genes.add(g)
+                if not all_genes:
+                    st.warning("没有找到有效靶点基因")
+                else:
+                    gene_list = sorted(all_genes)
+                    st.info(f"汇总了 {len(gene_list)} 个靶点基因，开始富集分析...")
+                    with st.spinner(f"正在分析 {len(gene_list)} 个基因..."):
+                        try:
+                            enr_dict = run_gseapy_enrichment(gene_list=gene_list, organism="human")
+                            merged = merge_enrichment_results(enr_dict)
+                            st.session_state['enrichment_df'] = merged
+                            if len(merged) == 0:
+                                st.warning("未找到显著富集结果")
+                            else:
+                                st.success(f"富集分析完成，共 {len(merged)} 条结果")
+                                if plot_enrichment_dotplot is not None:
+                                    fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
+                                    if fig:
+                                        st.plotly_chart(fig, width="stretch")
+                                st.dataframe(
+                                    merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
+                                    height=400
+                                )
+                                b = io.BytesIO()
+                                with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                    merged.to_excel(w, index=False, sheet_name='Enrichment')
+                                b.seek(0)
+                                st.download_button(
+                                    "Download Enrichment Results",
+                                    data=b.getvalue(),
+                                    file_name="gseapy_enrichment.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+                        except Exception as e:
+                            st.error(f"富集分析失败: {e}")
+
+# ====== ② SwissTargetPrediction ======
+                elif "②" in np_mode:
+                    st.markdown("#### ② SwissTargetPrediction 靶点预测")
+                    st.caption("输入 SMILES，自动预测人类靶点基因（Probability > 0.01）。每个 SMILES 约需 1-2 秒。")
+                    st_smiles = st.text_area("输入 SMILES（支持批量，每行一个）",
+                        placeholder="CC1=CC=C(C=C1)C2=CC(=NN2C=3C=C(C=C3)C4=CC=CC=C4)C5=CC=CC=C5\nCC(O)=O")
+                    if st.button("预测靶点", type="primary"):
+                        if not st_smiles.strip():
+                            st.warning("请输入至少一个 SMILES")
                         else:
-                            progress_bar2 = st.progress(0)
-                            def pg_cb2(cur, tot):
-                                progress_bar2.progress(int(cur/tot*100))
-                            df_out, errs = batch_swiss_target_prediction(
-                                df_in, smiles_col='SMILES', progress_callback=pg_cb2
-                            )
-                            progress_bar2.empty()
-                            n_hit = (df_out['Target_Count'] > 0).sum()
-                            st.success(f"完成！{n_hit}/{len(df_out)} 个化合物命中靶点")
-                            if errs:
-                                st.warning(f"出错 {len(errs)} 个")
-                            st.session_state['target_df'] = df_out
-                            disp = df_out[df_out['Target_Count'] > 0][
-                                ['Metabolite', 'SMILES', 'Predicted_Targets', 'Target_Count']
-                            ]
-                            st.dataframe(disp, height=300)
+                            smiles_list = [s.strip() for s in st_smiles.strip().split('\n') if s.strip()]
+                            results = []
+                            bar = st.progress(0)
+                            for i, sm in enumerate(smiles_list):
+                                genes, cnt, err = query_swiss_target_prediction(sm)
+                                results.append({'SMILES': sm, 'Predicted_Targets': genes,
+                                               'Target_Count': cnt, 'Error': err})
+                                bar.progress(int((i+1)/len(smiles_list)*100))
+                            bar.empty()
+                            res_df = pd.DataFrame(results)
+                            st.session_state['target_df'] = res_df
+                            st.success(f"完成！{len(results)} 个化合物中有靶点记录: {(res_df['Target_Count']>0).sum()}")
+                            st.dataframe(res_df, height=300)
                             b = io.BytesIO()
                             with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                df_out.to_excel(w, index=False, sheet_name='Targets')
+                                res_df.to_excel(w, index=False, sheet_name='Targets')
                             b.seek(0)
-                            st.download_button(
-                                "Download Batch Targets",
-                                data=b.getvalue(),
-                                file_name="swiss_target_batch.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
+                            st.download_button("Download Target Prediction", data=b.getvalue(),
+                                file_name="swiss_target_prediction.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                    st.markdown("---")
+                    st.markdown("#### 批量预测（基于 SMILES 查询结果）")
+                    if st.button("对 SMILES 查询结果批量预测靶点", type="secondary"):
+                        if st.session_state.get('smiles_df') is None:
+                            st.warning("请先运行 ① SMILES 查询生成数据")
+                        else:
+                            df_in = st.session_state['smiles_df'].copy()
+                            # 过滤有效 SMILES
+                            df_in = df_in[df_in['SMILES'].notna() & (df_in['SMILES'] != 'NOT_FOUND') & (df_in['SMILES'] != 'PENDING')]
+                            if len(df_in) == 0:
+                                st.warning("没有有效的 SMILES 可供预测")
+                            else:
+                                progress_bar2 = st.progress(0)
+                                def pg_cb2(cur, tot):
+                                    progress_bar2.progress(int(cur/tot*100))
+                                df_out, errs = batch_swiss_target_prediction(df_in, smiles_col='SMILES',
+                                                                           progress_callback=pg_cb2)
+                                progress_bar2.empty()
+                                n_hit = (df_out['Target_Count'] > 0).sum()
+                                st.success(f"完成！{n_hit}/{len(df_out)} 个化合物命中靶点")
+                                if errs:
+                                    st.warning(f"出错 {len(errs)} 个: {errs[:3]}")
+                                st.session_state['target_df'] = df_out
+                                disp = df_out[df_out['Target_Count'] > 0][['Metabolite', 'SMILES', 'Predicted_Targets', 'Target_Count']]
+                                st.dataframe(disp, height=300)
+                                b = io.BytesIO()
+                                with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                    df_out.to_excel(w, index=False, sheet_name='Targets')
+                                b.seek(0)
+                                st.download_button("Download Batch Targets", data=b.getvalue(),
+                                    file_name="swiss_target_batch.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
                 # ====== ③ gseapy 富集分析 ======
-                st.markdown("---")
-                st.markdown("### ③ gseapy 富集分析（KEGG / GO）")
-                st.caption("输入基因列表，自动在 Enrichr 数据库做 KEGG + GO 富集分析（需要网络连接）。")
-                gene_input = st.text_area(
-                    "输入基因列表（每行一个，或用分号/逗号分隔）",
-                    placeholder="EGFR\nAKT1\nTP53\nVEGFA\nIL6\nTNF",
-                    key="gene_input"
-                )
-                col_db1, col_db2 = st.columns(2)
-                with col_db1:
-                    organisms = st.selectbox("物种", ["Human", "Mouse", "Rat"], index=0, key="org_select")
-                with col_db2:
-                    top_n_enr = st.number_input("每库显示 Top N", 5, 50, 20, key="top_n_enr")
-
-                if st.button("运行富集分析", type="primary", key="run_enrich_btn"):
-                    if not gene_input.strip():
-                        st.warning("请输入基因列表")
-                    else:
-                        raw = gene_input.replace(';', '\n').replace(',', '\n')
-                        genes = [g.strip() for g in raw.split('\n') if g.strip()]
-                        if not genes:
-                            st.warning("未能解析有效基因")
+                elif "③" in np_mode:
+                    st.markdown("#### ③ gseapy 富集分析（KEGG / GO）")
+                    st.caption("输入基因列表，自动在 Enrichr 数据库做 KEGG + GO 富集分析（需要网络连接）。")
+                    gene_input = st.text_area("输入基因列表（每行一个，或用分号/逗号分隔）",
+                        placeholder="EGFR\nAKT1\nTP53\nVEGFA\nIL6\nTNF")
+                    col_db1, col_db2 = st.columns(2)
+                    with col_db1:
+                        organisms = st.selectbox("物种", ["Human", "Mouse", "Rat"], index=0)
+                    with col_db2:
+                        top_n_enr = st.number_input("每库显示 Top N", 5, 50, 20)
+                    if st.button("运行富集分析", type="primary"):
+                        if not gene_input.strip():
+                            st.warning("请输入基因列表")
                         else:
-                            org_map = {"Human": "human", "Mouse": "mouse", "Rat": "rat"}
-                            with st.spinner(f"正在分析 {len(genes)} 个基因..."):
-                                try:
-                                    enr_dict = run_gseapy_enrichment(gene_list=genes, organism=org_map[organisms])
-                                    merged = merge_enrichment_results(enr_dict)
-                                    st.session_state['enrichment_df'] = merged
-                                    if len(merged) == 0:
-                                        st.warning("未找到显著富集结果")
-                                    else:
-                                        st.success(f"富集分析完成，共 {len(merged)} 条结果")
-                                        if plot_enrichment_dotplot is not None:
-                                            fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
-                                            if fig:
-                                                st.plotly_chart(fig, width="stretch")
-                                        st.dataframe(
-                                            merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
-                                            height=400
+                            # 解析基因列表
+                            raw = gene_input.replace(';', '\n').replace(',', '\n')
+                            genes = [g.strip() for g in raw.split('\n') if g.strip()]
+                            if not genes:
+                                st.warning("未能解析有效基因")
+                            else:
+                                org_map = {"Human": "human", "Mouse": "mouse", "Rat": "rat"}
+                                with st.spinner(f"正在分析 {len(genes)} 个基因..."):
+                                    try:
+                                        enr_dict = run_gseapy_enrichment(
+                                            gene_list=genes,
+                                            organism=org_map[organisms],
                                         )
-                                        b = io.BytesIO()
-                                        with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                            merged.to_excel(w, index=False, sheet_name='Enrichment')
-                                        b.seek(0)
-                                        st.download_button(
-                                            "Download Enrichment Results",
-                                            data=b.getvalue(),
-                                            file_name="gseapy_enrichment.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                        )
-                                except Exception as e:
-                                    st.error(f"富集分析失败: {e}")
+                                        merged = merge_enrichment_results(enr_dict)
+                                        st.session_state['enrichment_df'] = merged
+                                        if len(merged) == 0:
+                                            st.warning("未找到显著富集结果")
+                                        else:
+                                            st.success(f"富集分析完成，共 {len(merged)} 条结果")
+                                            # 汇总统计
+                                            for db, grp in merged.groupby('Database'):
+                                                st.markdown(f"**{db}:** {len(grp)} 条结果")
+                                            # Dotplot
+                                            if plot_enrichment_dotplot is not None:
+                                                fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
+                                                if fig:
+                                                    st.plotly_chart(fig, width="stretch")
+                                            st.dataframe(merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
+                                                         height=400)
+                                            b = io.BytesIO()
+                                            with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                                merged.to_excel(w, index=False, sheet_name='Enrichment')
+                                            b.seek(0)
+                                            st.download_button("Download Enrichment Results",
+                                                data=b.getvalue(),
+                                                file_name="gseapy_enrichment.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                    except Exception as e:
+                                        st.error(f"富集分析失败: {e}")
 
-                # ---- 一键分析：使用 SwissTargetPrediction 靶点基因 ----
-                st.markdown("---")
-                st.markdown("#### 一键分析：使用 SwissTargetPrediction 靶点基因做富集")
-                if st.button("用当前靶点预测结果做富集分析", type="secondary", key="onekey_enrich_btn"):
-                    if st.session_state.get('target_df') is None:
-                        st.warning("请先运行 ② SwissTargetPrediction 生成靶点数据")
-                    else:
-                        all_genes = set()
-                        for _, row in st.session_state['target_df'].iterrows():
-                            tg = str(row.get('Predicted_Targets', ''))
-                            if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
-                                for g in tg.split(';'):
-                                    g = g.strip()
-                                    if g:
-                                        all_genes.add(g)
-                        if not all_genes:
-                            st.warning("没有找到有效靶点基因")
+                    # ---- 从靶点预测结果直接导入基因列表 ----
+                    st.markdown("---")
+                    st.markdown("#### 一键分析：使用 SwissTargetPrediction 靶点基因")
+                    if st.button("用当前靶点预测结果做富集分析", type="secondary"):
+                        if st.session_state.get('target_df') is None:
+                            st.warning("请先运行 ② SwissTargetPrediction 生成靶点数据")
                         else:
-                            gene_list = sorted(all_genes)
-                            st.info(f"汇总了 {len(gene_list)} 个靶点基因，开始富集分析...")
-                            with st.spinner(f"正在分析 {len(gene_list)} 个基因..."):
-                                try:
-                                    enr_dict = run_gseapy_enrichment(gene_list=gene_list, organism="human")
-                                    merged = merge_enrichment_results(enr_dict)
-                                    st.session_state['enrichment_df'] = merged
-                                    if len(merged) == 0:
-                                        st.warning("未找到显著富集结果")
-                                    else:
-                                        st.success(f"富集分析完成，共 {len(merged)} 条结果")
-                                        if plot_enrichment_dotplot is not None:
-                                            fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
-                                            if fig:
-                                                st.plotly_chart(fig, width="stretch")
-                                        st.dataframe(
-                                            merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
-                                            height=400
-                                        )
-                                        b = io.BytesIO()
-                                        with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                            merged.to_excel(w, index=False, sheet_name='Enrichment')
-                                        b.seek(0)
-                                        st.download_button(
-                                            "Download Enrichment Results",
-                                            data=b.getvalue(),
-                                            file_name="gseapy_enrichment.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                        )
-                                except Exception as e:
-                                    st.error(f"富集分析失败: {e}")
+                            # 合并所有靶点基因
+                            all_genes = set()
+                            for _, row in st.session_state['target_df'].iterrows():
+                                tg = str(row.get('Predicted_Targets', ''))
+                                if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
+                                    for g in tg.split(';'):
+                                        g = g.strip()
+                                        if g:
+                                            all_genes.add(g)
+                            if not all_genes:
+                                st.warning("没有找到有效靶点基因")
+                            else:
+                                gene_list = sorted(all_genes)
+                                st.info(f"汇总了 {len(gene_list)} 个靶点基因，开始富集分析...")
+                                org_map = {"Human": "human", "Mouse": "mouse", "Rat": "rat"}
+                                with st.spinner(f"正在分析 {len(gene_list)} 个基因..."):
+                                    try:
+                                        enr_dict = run_gseapy_enrichment(gene_list=gene_list, organism="human")
+                                        merged = merge_enrichment_results(enr_dict)
+                                        st.session_state['enrichment_df'] = merged
+                                        if len(merged) == 0:
+                                            st.warning("未找到显著富集结果")
+                                        else:
+                                            st.success(f"富集分析完成，共 {len(merged)} 条结果（4个数据库）")
+                                            if plot_enrichment_dotplot is not None:
+                                                fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
+                                                if fig:
+                                                    st.plotly_chart(fig, width="stretch")
+                                            st.dataframe(merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
+                                                         height=400)
+                                            b = io.BytesIO()
+                                            with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                                merged.to_excel(w, index=False, sheet_name='Enrichment')
+                                            b.seek(0)
+                                            st.download_button("Download Enrichment Results",
+                                                data=b.getvalue(),
+                                                file_name="gseapy_enrichment.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                    except Exception as e:
+                                        st.error(f"富集分析失败: {e}")
 
-        # ====== ② SwissTargetPrediction ======
-                            st.markdown("#### ② SwissTargetPrediction 靶点预测")
-                            st.caption("输入 SMILES，自动预测人类靶点基因（Probability > 0.01）。每个 SMILES 约需 1-2 秒。")
-                            st_smiles = st.text_area("输入 SMILES（支持批量，每行一个）",
-                                placeholder="CC1=CC=C(C=C1)C2=CC(=NN2C=3C=C(C=C3)C4=CC=CC=C4)C5=CC=CC=C5\nCC(O)=O")
-                            if st.button("预测靶点", type="primary"):
-                                if not st_smiles.strip():
-                                    st.warning("请输入至少一个 SMILES")
-                                else:
-                                    smiles_list = [s.strip() for s in st_smiles.strip().split('\n') if s.strip()]
-                                    results = []
-                                    bar = st.progress(0)
-                                    for i, sm in enumerate(smiles_list):
-                                        genes, cnt, err = query_swiss_target_prediction(sm)
-                                        results.append({'SMILES': sm, 'Predicted_Targets': genes,
-                                                       'Target_Count': cnt, 'Error': err})
-                                        bar.progress(int((i+1)/len(smiles_list)*100))
-                                    bar.empty()
-                                    res_df = pd.DataFrame(results)
-                                    st.session_state['target_df'] = res_df
-                                    st.success(f"完成！{len(results)} 个化合物中有靶点记录: {(res_df['Target_Count']>0).sum()}")
-                                    st.dataframe(res_df, height=300)
-                                    b = io.BytesIO()
-                                    with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                        res_df.to_excel(w, index=False, sheet_name='Targets')
-                                    b.seek(0)
-                                    st.download_button("Download Target Prediction", data=b.getvalue(),
-                                        file_name="swiss_target_prediction.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-                            st.markdown("---")
-                            st.markdown("#### 批量预测（基于 SMILES 查询结果）")
-                            if st.button("对 SMILES 查询结果批量预测靶点", type="secondary"):
-                                if st.session_state.get('smiles_df') is None:
-                                    st.warning("请先运行 ① SMILES 查询生成数据")
-                                else:
-                                    df_in = st.session_state['smiles_df'].copy()
-                                    # 过滤有效 SMILES
-                                    df_in = df_in[df_in['SMILES'].notna() & (df_in['SMILES'] != 'NOT_FOUND') & (df_in['SMILES'] != 'PENDING')]
-                                    if len(df_in) == 0:
-                                        st.warning("没有有效的 SMILES 可供预测")
-                                    else:
-                                        progress_bar2 = st.progress(0)
-                                        def pg_cb2(cur, tot):
-                                            progress_bar2.progress(int(cur/tot*100))
-                                        df_out, errs = batch_swiss_target_prediction(df_in, smiles_col='SMILES',
-                                                                                   progress_callback=pg_cb2)
-                                        progress_bar2.empty()
-                                        n_hit = (df_out['Target_Count'] > 0).sum()
-                                        st.success(f"完成！{n_hit}/{len(df_out)} 个化合物命中靶点")
-                                        if errs:
-                                            st.warning(f"出错 {len(errs)} 个: {errs[:3]}")
-                                        st.session_state['target_df'] = df_out
-                                        disp = df_out[df_out['Target_Count'] > 0][['Metabolite', 'SMILES', 'Predicted_Targets', 'Target_Count']]
-                                        st.dataframe(disp, height=300)
-                                        b = io.BytesIO()
-                                        with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                            df_out.to_excel(w, index=False, sheet_name='Targets')
-                                        b.seek(0)
-                                        st.download_button("Download Batch Targets", data=b.getvalue(),
-                                            file_name="swiss_target_batch.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-                        # ====== ③ gseapy 富集分析 ======
-                            st.markdown("#### ③ gseapy 富集分析（KEGG / GO）")
-                            st.caption("输入基因列表，自动在 Enrichr 数据库做 KEGG + GO 富集分析（需要网络连接）。")
-                            gene_input = st.text_area("输入基因列表（每行一个，或用分号/逗号分隔）",
-                                placeholder="EGFR\nAKT1\nTP53\nVEGFA\nIL6\nTNF")
-                            col_db1, col_db2 = st.columns(2)
-                            with col_db1:
-                                organisms = st.selectbox("物种", ["Human", "Mouse", "Rat"], index=0)
-                            with col_db2:
-                                top_n_enr = st.number_input("每库显示 Top N", 5, 50, 20)
-                            if st.button("运行富集分析", type="primary"):
-                                if not gene_input.strip():
-                                    st.warning("请输入基因列表")
-                                else:
-                                    # 解析基因列表
-                                    raw = gene_input.replace(';', '\n').replace(',', '\n')
-                                    genes = [g.strip() for g in raw.split('\n') if g.strip()]
-                                    if not genes:
-                                        st.warning("未能解析有效基因")
-                                    else:
-                                        org_map = {"Human": "human", "Mouse": "mouse", "Rat": "rat"}
-                                        with st.spinner(f"正在分析 {len(genes)} 个基因..."):
-                                            try:
-                                                enr_dict = run_gseapy_enrichment(
-                                                    gene_list=genes,
-                                                    organism=org_map[organisms],
-                                                )
-                                                merged = merge_enrichment_results(enr_dict)
-                                                st.session_state['enrichment_df'] = merged
-                                                if len(merged) == 0:
-                                                    st.warning("未找到显著富集结果")
-                                                else:
-                                                    st.success(f"富集分析完成，共 {len(merged)} 条结果")
-                                                    # 汇总统计
-                                                    for db, grp in merged.groupby('Database'):
-                                                        st.markdown(f"**{db}:** {len(grp)} 条结果")
-                                                    # Dotplot
-                                                    if plot_enrichment_dotplot is not None:
-                                                        fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
-                                                        if fig:
-                                                            st.plotly_chart(fig, width="stretch")
-                                                    st.dataframe(merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
-                                                                 height=400)
-                                                    b = io.BytesIO()
-                                                    with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                                        merged.to_excel(w, index=False, sheet_name='Enrichment')
-                                                    b.seek(0)
-                                                    st.download_button("Download Enrichment Results",
-                                                        data=b.getvalue(),
-                                                        file_name="gseapy_enrichment.xlsx",
-                                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                                            except Exception as e:
-                                                st.error(f"富集分析失败: {e}")
-
-                            # ---- 从靶点预测结果直接导入基因列表 ----
-                            st.markdown("---")
-                            st.markdown("#### 一键分析：使用 SwissTargetPrediction 靶点基因")
-                            if st.button("用当前靶点预测结果做富集分析", type="secondary"):
-                                if st.session_state.get('target_df') is None:
-                                    st.warning("请先运行 ② SwissTargetPrediction 生成靶点数据")
-                                else:
-                                    # 合并所有靶点基因
-                                    all_genes = set()
-                                    for _, row in st.session_state['target_df'].iterrows():
-                                        tg = str(row.get('Predicted_Targets', ''))
-                                        if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
-                                            for g in tg.split(';'):
-                                                g = g.strip()
-                                                if g:
-                                                    all_genes.add(g)
-                                    if not all_genes:
-                                        st.warning("没有找到有效靶点基因")
-                                    else:
-                                        gene_list = sorted(all_genes)
-                                        st.info(f"汇总了 {len(gene_list)} 个靶点基因，开始富集分析...")
-                                        org_map = {"Human": "human", "Mouse": "mouse", "Rat": "rat"}
-                                        with st.spinner(f"正在分析 {len(gene_list)} 个基因..."):
-                                            try:
-                                                enr_dict = run_gseapy_enrichment(gene_list=gene_list, organism="human")
-                                                merged = merge_enrichment_results(enr_dict)
-                                                st.session_state['enrichment_df'] = merged
-                                                if len(merged) == 0:
-                                                    st.warning("未找到显著富集结果")
-                                                else:
-                                                    st.success(f"富集分析完成，共 {len(merged)} 条结果（4个数据库）")
-                                                    if plot_enrichment_dotplot is not None:
-                                                        fig = plot_enrichment_dotplot(merged.head(top_n_enr * 2))
-                                                        if fig:
-                                                            st.plotly_chart(fig, width="stretch")
-                                                    st.dataframe(merged[['Database', 'Term', 'P_value', 'Adjusted_P_value', 'Genes', 'Overlap']].head(50),
-                                                                 height=400)
-                                                    b = io.BytesIO()
-                                                    with pd.ExcelWriter(b, engine='openpyxl') as w:
-                                                        merged.to_excel(w, index=False, sheet_name='Enrichment')
-                                                    b.seek(0)
-                                                    st.download_button("Download Enrichment Results",
-                                                        data=b.getvalue(),
-                                                        file_name="gseapy_enrichment.xlsx",
-                                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                                            except Exception as e:
-                                                st.error(f"富集分析失败: {e}")
-                st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")
-                st.markdown("---")
-                st.subheader("Workflow")
-                st.markdown("""
-                **Step 1: Upload Files** - Upload all `*_diff.exp.xls` comparison files (multiple files supported) + `anno.xls` annotation file
-                **Step 2: Configure Parameters** - Adjust VIP and P-value thresholds in the sidebar
-                **Step 3: Analysis** - Click **Start Analysis** to run the pipeline
-                **Step 4: Results** - 📊 Data Overview · 📈 Visualization · ⭐ Star Molecules · 🧬 KEGG Enrichment
-                """)
+    else:
+        st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")
+        st.markdown("---")
+        st.subheader("Workflow")
+        st.markdown("""
+        **Step 1: Upload Files** - Upload all `*_diff.exp.xls` comparison files (multiple files supported) + `anno.xls` annotation file
+        **Step 2: Configure Parameters** - Adjust VIP and P-value thresholds in the sidebar
+        **Step 3: Analysis** - Click **Start Analysis** to run the pipeline
+        **Step 4: Results** - 📊 Data Overview · 📈 Visualization · ⭐ Star Molecules · 🧬 KEGG Enrichment
+        """)
 
 
-        if __name__ == '__main__':
-            main()
-
-
-
+if __name__ == '__main__':
+    main()

@@ -2049,6 +2049,7 @@ def main():
                                     st.error(f"富集分析失败: {e}")
 
         # ====== ② SwissTargetPrediction ======
+                        elif "②" in np_mode:
                             st.markdown("#### ② SwissTargetPrediction 靶点预测")
                             st.caption("输入 SMILES，自动预测人类靶点基因（Probability > 0.01）。每个 SMILES 约需 1-2 秒。")
                             st_smiles = st.text_area("输入 SMILES（支持批量，每行一个）",
@@ -2112,6 +2113,7 @@ def main():
                                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
                         # ====== ③ gseapy 富集分析 ======
+                        elif "③" in np_mode:
                             st.markdown("#### ③ gseapy 富集分析（KEGG / GO）")
                             st.caption("输入基因列表，自动在 Enrichr 数据库做 KEGG + GO 富集分析（需要网络连接）。")
                             gene_input = st.text_area("输入基因列表（每行一个，或用分号/逗号分隔）",
@@ -2212,6 +2214,8 @@ def main():
                                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                                             except Exception as e:
                                                 st.error(f"富集分析失败: {e}")
+
+            else:
                 st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")
                 st.markdown("---")
                 st.subheader("Workflow")
@@ -2225,6 +2229,4 @@ def main():
 
         if __name__ == '__main__':
             main()
-
-
 

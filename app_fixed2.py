@@ -2212,6 +2212,8 @@ def main():
                                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                                             except Exception as e:
                                                 st.error(f"富集分析失败: {e}")
+
+            else:
                 st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")
                 st.markdown("---")
                 st.subheader("Workflow")
@@ -2225,6 +2227,5 @@ def main():
 
         if __name__ == '__main__':
             main()
-
 
 
