@@ -364,6 +364,97 @@ def import_smiles_from_csv(csv_path: str, name_col: str = "name",
         raise RuntimeError(f"导入失败: {e}")
 
 
+def _pubchem_name_to_smiles(name: str, timeout: int = 15) -> tuple:
+    """
+    多策略 PubChem 查询，按优先级尝试：
+    1. 精确查询（PropertyTable）
+    2. CID 中转查询（更稳定）
+    3. 模糊匹配
+    4. CAS 号查询
+    5. 相似性搜索（threshold=85）
+    Returns: (smiles, strategy, api_error_detail)
+    """
+    if not name:
+        return "", "skipped", ""
+
+    # 先做名称清理
+    query_name = _name_to_query(name)
+    if not query_name:
+        return "", "invalid_name", ""
+
+    # 尝试列表（按优先级）
+    strategies = []
+
+    # 策略1：直接精确查询
+    strategies.append(("exact", query_name))
+
+    # 策略2：如果清理后名称与原始不同，额外尝试原始名
+    raw_name = str(name).strip()
+    if query_name.lower() != raw_name.lower():
+        strategies.append(("exact", raw_name))
+
+    # 策略3：去除 "3-" "7-" 等数字前缀（如 Pelargonidin 3-Glucoside → Pelargonidin）
+    cleaned = re.sub(r'^\d+[-\s]', '', query_name).strip()
+    if cleaned and cleaned.lower() != query_name.lower():
+        strategies.append(("exact", cleaned))
+
+    # 策略4：CAS 号检测
+    if re.match(r'^\d{2,7}-\d{2}-\d$', query_name):
+        strategies.append(("cas", query_name))
+
+    # 策略5：相似性搜索（兜底）
+    strategies.append(("similarity", query_name))
+
+    last_error = ""
+    for strategy, q in strategies:
+        try:
+            if strategy == "exact":
+                url = f"{_PUBCHEM_BASE}/compound/name/{quote(q)}/property/IsomericSMILES/JSON"
+                result = _http_get_json(url, timeout=timeout)
+                if "_error" not in result:
+                    # 检查是否是 Fault 结构
+                    if "Fault" in result:
+                        last_error = f"Fault: {result.get('Fault',{}).get('message','')}"
+                        continue
+                    props = result.get("PropertyTable", {}).get("Properties", [])
+                    if props and props[0].get("IsomericSMILES"):
+                        return props[0]["IsomericSMILES"], "exact", ""
+                    # 无结果空数组
+                    last_error = "PropertyTable empty"
+                    continue
+
+            elif strategy == "cas":
+                url = f"{_PUBCHEM_BASE}/compound/cas/{q}/property/IsomericSMILES/JSON"
+                result = _http_get_json(url, timeout=timeout)
+                if "_error" not in result and "Fault" not in result:
+                    props = result.get("PropertyTable", {}).get("Properties", [])
+                    if props and props[0].get("IsomericSMILES"):
+                        return props[0]["IsomericSMILES"], "cas", ""
+
+            elif strategy == "similarity":
+                # 先查 CID，再用 CID 查 SMILES（相似性搜索只返回 CID 列表）
+                cid_url = f"{_PUBCHEM_BASE}/compound/name/{quote(q)}/cids/JSON?algorithm=similarity&threshold=85"
+                cid_result = _http_get_json(cid_url, timeout=timeout)
+                if "_error" not in cid_result and "IdentifierList" in cid_result:
+                    cids = cid_result["IdentifierList"]["CID"]
+                    if cids:
+                        # 取第一个 CID 查 SMILES
+                        sm_url = f"{_PUBCHEM_BASE}/compound/cid/{cids[0]}/property/IsomericSMILES/JSON"
+                        sm_result = _http_get_json(sm_url, timeout=timeout)
+                        if "_error" not in sm_result:
+                            props = sm_result.get("PropertyTable", {}).get("Properties", [])
+                            if props and props[0].get("IsomericSMILES"):
+                                return props[0]["IsomericSMILES"], "similarity", ""
+                last_error = "similarity no result"
+                continue
+
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    return "", "all_failed", last_error
+
+
 def db_query_compound_with_fallback(name: str, metabolite: str = "") -> tuple:
     """
     带 fallback 的查询：
@@ -393,43 +484,27 @@ def db_query_compound_with_fallback(name: str, metabolite: str = "") -> tuple:
             db_log(name, metabolite, sm, "HIT_local_db", via="metabolite")
             return sm, "local_db", "metabolite"
 
-    # 3. API 查询（compound_name 优先）
+    # 3. API 查询（compound_name 优先）- 多策略
     via = ""
     if name and str(name).strip() not in invalid_vals:
         via = "compound_name"
-        result = _http_get_json(
-            f"{_PUBCHEM_BASE}/compound/name/{quote(str(name).strip())}/property/IsomericSMILES/JSON"
-        )
-        if "_error" not in result:
-            try:
-                sm = result["PropertyTable"]["Properties"][0].get("IsomericSMILES", "")
-                if sm:
-                    db_insert_name(name, sm, source="pubchem_api")
-                    db_log(name, metabolite, sm, "HIT_api", via="compound_name")
-                    return sm, "pubchem_api", "compound_name"
-            except (KeyError, IndexError, TypeError):
-                pass
-        # API 查到但无结果，记日志
-        err = result.get("_error", "no_result")
-        db_log(name, metabolite, "", "MISS_api", via="compound_name", error_msg=err)
+        smiles, strategy, api_err = _pubchem_name_to_smiles(str(name).strip())
+        if smiles:
+            db_insert_name(name, smiles, source=f"pubchem_{strategy}")
+            db_log(name, metabolite, smiles, "HIT_api", via=f"compound_name:{strategy}")
+            return smiles, "pubchem_api", "compound_name"
+        # 未查到，记录真实错误原因
+        db_log(name, metabolite, "", f"MISS_api", via="compound_name", error_msg=api_err or "no_result")
 
-    # 4. API fallback：用 metabolite 名称查
+    # 4. API fallback：用 metabolite 名称查（同样多策略）
     if metabolite and str(metabolite).strip() not in invalid_vals:
         via = "metabolite"
-        result = _http_get_json(
-            f"{_PUBCHEM_BASE}/compound/name/{quote(str(metabolite).strip())}/property/IsomericSMILES/JSON"
-        )
-        if "_error" not in result:
-            try:
-                sm = result["PropertyTable"]["Properties"][0].get("IsomericSMILES", "")
-                if sm:
-                    db_insert_metabolite(metabolite, sm, source="pubchem_api")
-                    db_log(name, metabolite, sm, "HIT_api", via="metabolite")
-                    return sm, "pubchem_api", "metabolite"
-            except (KeyError, IndexError, TypeError):
-                pass
-        err = result.get("_error", "no_result")
-        db_log(name, metabolite, "", "MISS_api", via="metabolite", error_msg=err)
+        smiles, strategy, api_err = _pubchem_name_to_smiles(str(metabolite).strip())
+        if smiles:
+            db_insert_metabolite(metabolite, smiles, source=f"pubchem_{strategy}")
+            db_log(name, metabolite, smiles, "HIT_api", via=f"metabolite:{strategy}")
+            return smiles, "pubchem_api", "metabolite"
+        db_log(name, metabolite, "", f"MISS_api", via="metabolite", error_msg=api_err or "no_result")
 
     # 5. 两者都查不到
     db_log(name, metabolite, "", "NOT_FOUND", via=via or "none")
@@ -485,7 +560,7 @@ def _name_to_query(name: str) -> str:
 @st.cache_data(ttl=3600)
 def query_smiles_by_name(compound_name: str) -> str:
     """
-    通过 PubChem REST API 按化合物名称查询 SMILES。
+    通过 PubChem REST API 按化合物名称查询 SMILES（多策略 fallback）。
     使用 urllib（Python 内置），不依赖 requests。
 
     Args:
@@ -497,62 +572,18 @@ def query_smiles_by_name(compound_name: str) -> str:
     if not compound_name or str(compound_name).strip() in ('-', '', 'nan', 'NaN'):
         return "NOT_FOUND"
 
-    # 解析出第一个合法名称
     first_name = _parse_first_name(compound_name)
     if not first_name:
         return "NOT_FOUND"
 
-    # 查询用名称列表（按优先级）
-    names_to_try = []
-    q_name = _name_to_query(first_name)
-    if q_name and q_name != first_name:
-        names_to_try.append(q_name)
-    names_to_try.append(first_name)
-
-    for name in names_to_try:
-        if not name:
-            continue
-
-        # 1. 精确查询
-        url = f"{_PUBCHEM_BASE}/compound/name/{quote(name)}/property/IsomericSMILES/JSON"
-        result = _http_get_json(url)
-        if "_error" not in result:
-            try:
-                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
-                if smiles:
-                    return smiles
-            except (KeyError, IndexError, TypeError):
-                pass
-
-        # 2. 模糊匹配
-        url_fuzzy = f"{_PUBCHEM_BASE}/compound/name/{quote(name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
-        result = _http_get_json(url_fuzzy)
-        if "_error" not in result:
-            try:
-                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
-                if smiles:
-                    return smiles
-            except (KeyError, IndexError, TypeError):
-                pass
-
-        # 3. CAS 号查询
-        if re.match(r'^\d+-\d+-\d+$', name):
-            cas_url = f"{_PUBCHEM_BASE}/compound/cas/{name}/property/IsomericSMILES/JSON"
-            result = _http_get_json(cas_url)
-            if "_error" not in result:
-                try:
-                    smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
-                    if smiles:
-                        return smiles
-                except (KeyError, IndexError, TypeError):
-                    pass
-
-    return "NOT_FOUND"
+    # 多策略查询（compound_name 优先）
+    smiles, strategy, api_err = _pubchem_name_to_smiles(first_name)
+    return smiles if smiles else "NOT_FOUND"
 
 
 def query_smiles_by_metabolite(metabolite_name: str) -> str:
     """
-    直接用代谢物名称（Metabolite列）查询 PubChem SMILES。
+    通过 PubChem REST API 按代谢物名称查询 SMILES（多策略 fallback）。
     """
     if not metabolite_name or str(metabolite_name).strip() in ('-', '', 'nan'):
         return "NOT_FOUND"
@@ -561,32 +592,8 @@ def query_smiles_by_metabolite(metabolite_name: str) -> str:
     if not name:
         return "NOT_FOUND"
 
-    names_to_try = [name, str(metabolite_name).strip()]
-
-    for query_name in names_to_try:
-        # 精确
-        url = f"{_PUBCHEM_BASE}/compound/name/{quote(query_name)}/property/IsomericSMILES/JSON"
-        result = _http_get_json(url)
-        if "_error" not in result:
-            try:
-                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
-                if smiles:
-                    return smiles
-            except (KeyError, IndexError, TypeError):
-                pass
-
-        # 模糊
-        url_fuzzy = f"{_PUBCHEM_BASE}/compound/name/{quote(query_name)}/property/IsomericSMILES/JSON?algorithm=fuzzy"
-        result = _http_get_json(url_fuzzy)
-        if "_error" not in result:
-            try:
-                smiles = result['PropertyTable']['Properties'][0].get('IsomericSMILES', '')
-                if smiles:
-                    return smiles
-            except (KeyError, IndexError, TypeError):
-                pass
-
-    return "NOT_FOUND"
+    smiles, strategy, api_err = _pubchem_name_to_smiles(name)
+    return smiles if smiles else "NOT_FOUND"
 
 
 def batch_query_smiles(df: pd.DataFrame, name_col: str = 'compound_name',
