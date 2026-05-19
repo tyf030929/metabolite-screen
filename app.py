@@ -1734,7 +1734,7 @@ def main():
                         if st.session_state.get('star_df') is None and st.session_state.get('star_df_v2') is None:
                             st.warning("请先在侧边栏运行分析，生成 Star Molecules 列表")
                         else:
-                            sdf = st.session_state.get('star_df_v2') or st.session_state.get('star_df')
+                            sdf = st.session_state.get('star_df_v2') if st.session_state.get('star_df_v2') is not None else st.session_state.get('star_df')
                             top20 = sdf.head(20).copy()
                             # 合并 pharma_df 获取 compound_name 列
                             if st.session_state.get('pharma_df') is not None:
