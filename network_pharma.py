@@ -49,7 +49,10 @@ def _http_get_json(url: str, timeout: int = 15) -> dict:
             raw = resp.read()
             if not raw:
                 return {"_error": "Empty response"}
-            return json.loads(raw.decode("utf-8"))
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError as je:
+                return {"_error": f"JSON decode error: {je}", "_raw": raw[:200].decode("utf-8", errors="replace")}
     except Exception as urllib_err:
         err_str = str(urllib_err)
 
@@ -65,11 +68,14 @@ def _http_get_json(url: str, timeout: int = 15) -> dict:
             ]
             raw = subprocess.check_output(curl_cmd, stderr=subprocess.STDOUT, timeout=timeout + 2)
             if raw:
-                result = json.loads(raw.decode("utf-8"))
-                result["_via"] = "curl"
-                return result
-        except Exception:
-            pass
+                try:
+                    result = json.loads(raw.decode("utf-8"))
+                    result["_via"] = "curl"
+                    return result
+                except json.JSONDecodeError as je:
+                    return {"_error": f"curl JSON decode error: {je}", "_raw": raw[:200].decode("utf-8", errors="replace")}
+        except Exception as e:
+            err_str = f"curl failed: {e}"
 
     return {"_error": err_str}
 
@@ -140,14 +146,16 @@ def check_network_connectivity() -> dict:
                 stderr=subprocess.STDOUT
             )
             data = json.loads(out)
-            sm = data.get("PropertyTable", {}).get("Properties", [{}])[0].get("IsomericSMILES", "")
-            results["http"] = f"OK → SMILES: {sm}"
+            props = data.get("PropertyTable", {}).get("Properties", [])
+            sm = props[0].get("IsomericSMILES", "") if props else ""
+            results["http"] = f"OK → SMILES: {sm}" if sm else f"OK but no SMILES: {json.dumps(data)[:200]}"
         else:
             req = Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
             with urlopen(req, timeout=10) as r:
                 data = json.loads(r.read())
-                sm = data.get("PropertyTable", {}).get("Properties", [{}])[0].get("IsomericSMILES", "")
-                results["http"] = f"OK → SMILES: {sm}"
+                props = data.get("PropertyTable", {}).get("Properties", [])
+                sm = props[0].get("IsomericSMILES", "") if props else ""
+                results["http"] = f"OK → SMILES: {sm}" if sm else f"OK but no SMILES: {json.dumps(data)[:200]}"
     except Exception as e:
         results["http"] = f"FAIL: {e}"
 
@@ -411,45 +419,70 @@ def _pubchem_name_to_smiles(name: str, timeout: int = 15) -> tuple:
             if strategy == "exact":
                 url = f"{_PUBCHEM_BASE}/compound/name/{quote(q)}/property/IsomericSMILES/JSON"
                 result = _http_get_json(url, timeout=timeout)
-                if "_error" not in result:
-                    # 检查是否是 Fault 结构
-                    if "Fault" in result:
-                        last_error = f"Fault: {result.get('Fault',{}).get('message','')}"
-                        continue
-                    props = result.get("PropertyTable", {}).get("Properties", [])
-                    if props and props[0].get("IsomericSMILES"):
-                        return props[0]["IsomericSMILES"], "exact", ""
-                    # 无结果空数组
-                    last_error = "PropertyTable empty"
+                if "_error" in result:
+                    last_error = result["_error"]
                     continue
+                # 检查是否是 Fault 结构
+                if "Fault" in result:
+                    fault_msg = result.get('Fault', {})
+                    last_error = f"Fault: {fault_msg.get('Message', fault_msg.get('message', str(fault_msg)))}"
+                    continue
+                props = result.get("PropertyTable", {}).get("Properties", [])
+                if not props:
+                    last_error = f"No properties returned for '{q}'"
+                    continue
+                # 尝试 IsomericSMILES，如果不存在则尝试 CanonicalSMILES
+                smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES", "")
+                if smiles:
+                    return smiles, "exact", ""
+                last_error = f"Properties exist but no SMILES field. Keys: {list(props[0].keys())}"
+                continue
 
             elif strategy == "cas":
                 url = f"{_PUBCHEM_BASE}/compound/cas/{q}/property/IsomericSMILES/JSON"
                 result = _http_get_json(url, timeout=timeout)
-                if "_error" not in result and "Fault" not in result:
-                    props = result.get("PropertyTable", {}).get("Properties", [])
-                    if props and props[0].get("IsomericSMILES"):
-                        return props[0]["IsomericSMILES"], "cas", ""
+                if "_error" in result:
+                    last_error = result["_error"]
+                    continue
+                if "Fault" in result:
+                    last_error = f"CAS query fault: {result.get('Fault', {}).get('Message', '')}"
+                    continue
+                props = result.get("PropertyTable", {}).get("Properties", [])
+                if props:
+                    smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES", "")
+                    if smiles:
+                        return smiles, "cas", ""
 
             elif strategy == "similarity":
                 # 先查 CID，再用 CID 查 SMILES（相似性搜索只返回 CID 列表）
                 cid_url = f"{_PUBCHEM_BASE}/compound/name/{quote(q)}/cids/JSON?algorithm=similarity&threshold=85"
                 cid_result = _http_get_json(cid_url, timeout=timeout)
-                if "_error" not in cid_result and "IdentifierList" in cid_result:
-                    cids = cid_result["IdentifierList"]["CID"]
-                    if cids:
-                        # 取第一个 CID 查 SMILES
-                        sm_url = f"{_PUBCHEM_BASE}/compound/cid/{cids[0]}/property/IsomericSMILES/JSON"
-                        sm_result = _http_get_json(sm_url, timeout=timeout)
-                        if "_error" not in sm_result:
-                            props = sm_result.get("PropertyTable", {}).get("Properties", [])
-                            if props and props[0].get("IsomericSMILES"):
-                                return props[0]["IsomericSMILES"], "similarity", ""
-                last_error = "similarity no result"
+                if "_error" in cid_result:
+                    last_error = f"Similarity CID error: {cid_result['_error']}"
+                    continue
+                if "IdentifierList" not in cid_result:
+                    last_error = f"Similarity: no IdentifierList in response"
+                    continue
+                cids = cid_result["IdentifierList"].get("CID", [])
+                if not cids:
+                    last_error = "Similarity: no CIDs found"
+                    continue
+                # 取第一个 CID 查 SMILES
+                sm_url = f"{_PUBCHEM_BASE}/compound/cid/{cids[0]}/property/IsomericSMILES/JSON"
+                sm_result = _http_get_json(sm_url, timeout=timeout)
+                if "_error" in sm_result:
+                    last_error = f"Similarity SMILES error: {sm_result['_error']}"
+                    continue
+                props = sm_result.get("PropertyTable", {}).get("Properties", [])
+                if props:
+                    smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES", "")
+                    if smiles:
+                        return smiles, "similarity", ""
+                last_error = "Similarity: no SMILES found"
                 continue
 
         except Exception as e:
-            last_error = str(e)
+            last_error = f"{strategy} exception: {e}"
             continue
 
     return "", "all_failed", last_error
