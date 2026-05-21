@@ -737,27 +737,39 @@ def query_swiss_target_prediction(smiles: str, species: str = "Homo sapiens",
     }
     org = species_map.get(species, "Homo_sapiens")
 
+    import http.cookiejar
     from urllib.parse import urlencode
+    from urllib.request import build_opener, HTTPCookieProcessor
 
     for attempt in range(max_retries + 1):
         try:
+            # 使用 cookie jar 自动管理 session
+            cookie_jar = http.cookiejar.CookieJar()
+            ssl_ctx = _get_ssl_context()
+            opener = build_opener(HTTPCookieProcessor(cookie_jar))
+
+            # Step 0: GET 主页获取 session cookie
+            main_req = Request("https://www.swisstargetprediction.ch/", headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            opener.open(main_req, timeout=15)
+
             # Step 1: 提交任务
-            submit_url = "https://www.swisstargetprediction.ch/predict.php"
             form_data = urlencode({
                 'smiles': smiles,
                 'organism': org,
                 'ioi': '2'
             }).encode('ascii')
 
-            submit_req = Request(submit_url, data=form_data, headers={
+            submit_req = Request("https://www.swisstargetprediction.ch/predict.php", data=form_data, headers={
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Referer': 'https://www.swisstargetprediction.ch/',
                 'Origin': 'https://www.swisstargetprediction.ch'
             })
 
-            with urlopen(submit_req, timeout=60, context=_get_ssl_context()) as resp:
-                submit_html = resp.read().decode('utf-8')
+            resp = opener.open(submit_req, timeout=60)
+            submit_html = resp.read().decode('utf-8')
 
             # Step 2: 提取 job ID
             job_match = re.search(r'result\.php\?job=(\d+)', submit_html)
@@ -770,37 +782,21 @@ def query_swiss_target_prediction(smiles: str, species: str = "Homo sapiens",
             job_id = job_match.group(1)
 
             # Step 3: 等待计算完成（最多等 90 秒）
-            result_url = None
             for wait in range(18):
                 time.sleep(5)
                 check_url = "https://www.swisstargetprediction.ch/result.php?job=%s&organism=%s" % (job_id, org)
                 check_req = Request(check_url, headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 })
-                with urlopen(check_req, timeout=30, context=_get_ssl_context()) as resp:
-                    check_html = resp.read().decode('utf-8')
-                    if 'Target' in check_html and 'Probability' in check_html:
-                        result_url = check_html
-                        break
-                    if 'finished' in check_html.lower() or 'result' in check_html.lower():
-                        # 可能重定向到了结果页
-                        result_url = check_html
-                        break
+                resp = opener.open(check_req, timeout=30)
+                check_html = resp.read().decode('utf-8')
+                if 'Target' in check_html and 'Probability' in check_html:
+                    return _parse_stp_result_html(check_html)
+                if 'finished' in check_html.lower():
+                    break
 
-            if not result_url:
-                return "ERROR", 0, "Calculation timeout (>90s)"
+            return "ERROR", 0, "Calculation timeout (>90s)"
 
-            # Step 4: 解析结果
-            return _parse_stp_result_html(result_url)
-
-        except URLError as e:
-            if isinstance(e.reason, ssl.SSLCertVerificationError):
-                # SSL 错误，重试
-                if attempt < max_retries:
-                    time.sleep(2)
-                    continue
-                return "ERROR", 0, f"SSL error: {e.reason}"
-            return "ERROR", 0, str(e)
         except Exception as e:
             if attempt < max_retries:
                 time.sleep(2)
