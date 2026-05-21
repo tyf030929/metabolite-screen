@@ -947,21 +947,7 @@ def run_gseapy_enrichment(gene_list: list, organism: str = "human",
             if enr.results is not None and len(enr.results) > 0:
                 res_df = enr.results.copy()
                 res_df['Database'] = db
-                # 标准化列名
-                col_map = {}
-                for c in res_df.columns:
-                    cl = c.lower()
-                    if 'term' in cl or 'pathway' in cl:
-                        col_map[c] = 'Term'
-                    elif 'pvalue' in cl or 'p-value' in cl:
-                        col_map[c] = 'P_value'
-                    elif 'adjusted' in cl or 'bh' in cl:
-                        col_map[c] = 'Adjusted_P_value'
-                    elif 'genes' in cl:
-                        col_map[c] = 'Genes'
-                    elif 'overlap' in cl or 'hits' in cl:
-                        col_map[c] = 'Overlap'
-                res_df = res_df.rename(columns=col_map)
+                # 去除重复列名（保留第一个）- 只在合并前处理
                 results[db] = res_df
         except Exception:
             results[db] = pd.DataFrame()
@@ -972,12 +958,31 @@ def merge_enrichment_results(enr_dict: dict) -> pd.DataFrame:
     """
     合并多个数据库的富集结果。
     """
+    # 标准化列名映射（从 Enrichr 原始列名 → 标准列名）
+    COL_MAP = {
+        'term': 'Term', 'pathway': 'Term',
+        'p-value': 'P_value', 'pvalue': 'P_value', 'p value': 'P_value',
+        'old p-value': 'P_value',
+        'adjusted p-value': 'Adjusted_P_value', 'adjusted pvalue': 'Adjusted_P_value',
+        'adjusted p-value (bh)': 'Adjusted_P_value', 'fdr': 'Adjusted_P_value',
+        'genes': 'Genes', 'gene': 'Genes',
+        'overlap': 'Overlap', 'overlap/hits': 'Overlap',
+    }
     dfs = []
     for db, df in enr_dict.items():
         if df is not None and len(df) > 0:
             df = df.copy()
             if 'Database' not in df.columns:
                 df['Database'] = db
+            # 标准化列名
+            col_map = {}
+            for c in df.columns:
+                cl = c.lower().strip()
+                if cl in COL_MAP:
+                    col_map[c] = COL_MAP[cl]
+            df = df.rename(columns=col_map)
+            # 去重（保留第一个出现的）
+            df = df.loc[:, ~df.columns.duplicated()]
             dfs.append(df)
     if not dfs:
         return pd.DataFrame()
