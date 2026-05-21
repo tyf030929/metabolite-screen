@@ -53,6 +53,11 @@ except ImportError:
     match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = None
 
 try:
+    import app_backup
+except ImportError:
+    app_backup = None
+
+try:
     from multivariate_stats import (
         detect_species_columns_from_diff, build_abundance_matrix, compute_log2fc,
         run_pca, run_plsda, run_oplsda, permutation_test_plsda,
@@ -799,6 +804,61 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Input format**: `.xls`/`.xlsx`/`.tsv` 文件（自动识别）")
 
+    # ===== 备份/恢复区域 =====
+    if app_backup is not None:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("Backup & Restore")
+
+        # 显示本地备份状态
+        backup_info = app_backup.get_backup_info()
+        if backup_info['exists']:
+            meta = backup_info.get('meta', {})
+            backup_time = meta.get('backup_time', 'unknown')
+            total_tables = meta.get('total_tables', 0)
+            st.sidebar.info(f"Local backup: {backup_time[:16]} ({total_tables} tables, {backup_info['file_size_kb']:.0f}KB)")
+
+            # 下载备份按钮
+            backup_bytes = app_backup.get_backup_db_bytes()
+            if backup_bytes:
+                st.sidebar.download_button(
+                    label="Download Backup (.db)",
+                    data=backup_bytes,
+                    file_name="analysis_backup.db",
+                    mime="application/x-sqlite3",
+                    width="stretch",
+                )
+
+        # 上传恢复
+        uploaded_backup = st.sidebar.file_uploader(
+            "Upload Backup (.db or .xlsx)",
+            type=['db', 'xlsx', 'xls'],
+            help="上传之前下载的备份文件，恢复所有分析结果",
+        )
+        if uploaded_backup is not None:
+            with st.spinner("Restoring from backup..."):
+                restore_result = app_backup.import_results(uploaded_backup)
+                if restore_result['success']:
+                    st.session_state.update(restore_result['data'])
+                    st.session_state['analysis_done'] = True
+                    st.sidebar.success(f"Restored: {restore_result['message']}")
+                    st.rerun()
+                else:
+                    st.sidebar.error(restore_result['message'])
+
+        st.sidebar.markdown("---")
+
+        # Download all results as Excel
+        if st.session_state.get('analysis_done', False):
+            st.sidebar.subheader("Export All Results")
+            excel_bytes = app_backup.export_all_results(st.session_state)
+            st.sidebar.download_button(
+                label="Download All Results (.xlsx)",
+                data=excel_bytes,
+                file_name="all_analysis_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                width="stretch",
+            )
+
     st.title("差异代谢物药用筛选 Web")
     st.markdown("上传差异分析文件 + 注释文件，自动完成筛选、可视化、明星分子精选、KEGG 富集分析。")
 
@@ -869,6 +929,13 @@ def main():
         st.session_state['vip_thresh'] = vip_thresh
         st.session_state['p_thresh'] = p_thresh
         st.success("Analysis complete!")
+
+        # Auto-save to backup
+        if app_backup is not None:
+            with st.spinner("Auto-saving backup..."):
+                save_result = app_backup.save_backup(st.session_state)
+                if save_result['success']:
+                    st.info(f"Auto-backup saved: {save_result['message']}")
 
     if st.session_state['analysis_done']:
         tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
