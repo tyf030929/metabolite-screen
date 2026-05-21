@@ -4,6 +4,7 @@
 依赖: gseapy, pandas, numpy; PubChem API调用使用标准库 urllib（无需 requests）
 """
 
+import ssl
 import time
 import re
 import json
@@ -34,17 +35,27 @@ _PROB_THRESHOLD = 0.01  # 靶点预测概率阈值
 _has_curl = shutil.which("curl") is not None
 
 
+def _get_ssl_context():
+    """返回一个禁用验证的 SSL context（仅用于 fallback，应对 Windows Python 3.13 证书问题）"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def _http_get_json(url: str, timeout: int = 15) -> dict:
     """
-    GET JSON，支持 curl fallback。
-    优先用 urllib，失败后尝试 curl（云端常用 curl 白名单）。
+    GET JSON，支持 SSL fallback + curl fallback。
+    优先用 urllib → SSL 失败则禁用验证重试 → 最后 curl。
     """
-    # 方法1：urllib
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    # 方法1：urllib（正常 SSL）
     try:
-        req = Request(url, headers={
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (compatible; NetworkPharmaBot/1.0)"
-        })
+        req = Request(url, headers=headers)
         with urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
             if not raw:
@@ -53,6 +64,26 @@ def _http_get_json(url: str, timeout: int = 15) -> dict:
                 return json.loads(raw.decode("utf-8"))
             except json.JSONDecodeError as je:
                 return {"_error": f"JSON decode error: {je}", "_raw": raw[:200].decode("utf-8", errors="replace")}
+    except URLError as e:
+        # 检查是否是 SSL 证书验证失败（被 URLError 包裹）
+        if isinstance(e.reason, ssl.SSLCertVerificationError):
+            # 方法1b：SSL 验证失败，禁用验证重试
+            try:
+                req = Request(url, headers=headers)
+                with urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
+                    raw = resp.read()
+                    if not raw:
+                        return {"_error": "Empty response"}
+                    try:
+                        result = json.loads(raw.decode("utf-8"))
+                        result["_via"] = "urllib_noverify"
+                        return result
+                    except json.JSONDecodeError as je:
+                        return {"_error": f"JSON decode error (noverify): {je}", "_raw": raw[:200].decode("utf-8", errors="replace")}
+            except Exception as e:
+                err_str = f"urllib_noverify failed: {e}"
+        else:
+            err_str = str(e)
     except Exception as urllib_err:
         err_str = str(urllib_err)
 
@@ -60,10 +91,10 @@ def _http_get_json(url: str, timeout: int = 15) -> dict:
     if _has_curl:
         try:
             curl_cmd = [
-                "curl", "-s", "-S",
+                "curl.exe", "-s", "-S",
                 "--max-time", str(timeout),
                 "-H", "Accept: application/json",
-                "-H", "User-Agent: Mozilla/5.0 (compatible; NetworkPharmaBot/1.0)",
+                "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 url
             ]
             raw = subprocess.check_output(curl_cmd, stderr=subprocess.STDOUT, timeout=timeout + 2)
@@ -81,30 +112,47 @@ def _http_get_json(url: str, timeout: int = 15) -> dict:
 
 
 def _http_post_json(url: str, payload: dict, timeout: int = 30) -> dict:
-    """POST JSON，支持 curl fallback"""
+    """POST JSON，支持 SSL fallback + curl fallback"""
     body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
 
-    # 方法1：urllib
+    # 方法1：urllib（正常 SSL）
     try:
-        req = Request(url, data=body, headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (compatible; NetworkPharmaBot/1.0)"
-        })
+        req = Request(url, data=body, headers=headers)
         with urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
             if not raw:
                 return {"_error": "Empty response"}
             return json.loads(raw.decode("utf-8"))
+    except URLError as e:
+        # 检查是否是 SSL 证书验证失败（被 URLError 包裹）
+        if isinstance(e.reason, ssl.SSLCertVerificationError):
+            # 方法1b：SSL 验证失败，禁用验证重试
+            try:
+                req = Request(url, data=body, headers=headers)
+                with urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
+                    raw = resp.read()
+                    if not raw:
+                        return {"_error": "Empty response"}
+                    result = json.loads(raw.decode("utf-8"))
+                    result["_via"] = "urllib_noverify"
+                    return result
+            except Exception as e:
+                err_str = f"urllib_noverify failed: {e}"
+        else:
+            err_str = str(e)
     except Exception as urllib_err:
         err_str = str(urllib_err)
 
     # 方法2：curl fallback
     if _has_curl:
         try:
-            import shlex
             curl_cmd = [
-                "curl", "-s", "-S",
+                "curl.exe", "-s", "-S",
                 "--max-time", str(timeout),
                 "-X", "POST",
                 "-H", "Content-Type: application/json",
@@ -142,19 +190,19 @@ def check_network_connectivity() -> dict:
     try:
         if _has_curl:
             out = subprocess.check_output(
-                ["curl", "-s", "-S", "--max-time", "10", test_url],
+                ["curl.exe", "-s", "-S", "--max-time", "10", test_url],
                 stderr=subprocess.STDOUT
             )
             data = json.loads(out)
             props = data.get("PropertyTable", {}).get("Properties", [])
-            sm = props[0].get("IsomericSMILES", "") if props else ""
+            sm = (props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES") or props[0].get("SMILES", "")) if props else ""
             results["http"] = f"OK → SMILES: {sm}" if sm else f"OK but no SMILES: {json.dumps(data)[:200]}"
         else:
             req = Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urlopen(req, timeout=10) as r:
+            with urlopen(req, timeout=10, context=_get_ssl_context()) as r:
                 data = json.loads(r.read())
                 props = data.get("PropertyTable", {}).get("Properties", [])
-                sm = props[0].get("IsomericSMILES", "") if props else ""
+                sm = (props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES") or props[0].get("SMILES", "")) if props else ""
                 results["http"] = f"OK → SMILES: {sm}" if sm else f"OK but no SMILES: {json.dumps(data)[:200]}"
     except Exception as e:
         results["http"] = f"FAIL: {e}"
@@ -164,7 +212,7 @@ def check_network_connectivity() -> dict:
         st_url = "https://www.swisstargetprediction.ch/api/search"
         if _has_curl:
             out = subprocess.check_output(
-                ["curl", "-s", "-S", "--max-time", "10", "-X", "POST",
+                ["curl.exe", "-s", "-S", "--max-time", "10", "-X", "POST",
                  "-H", "Content-Type: application/json",
                  "-d", '{"smiles":"CC","species":"Homo sapiens"}',
                  st_url],
@@ -175,7 +223,7 @@ def check_network_connectivity() -> dict:
             req = Request(st_url,
                           data=json.dumps({"smiles": "CC", "species": "Homo sapiens"}).encode(),
                           headers={"Content-Type": "application/json"})
-            with urlopen(req, timeout=10) as r:
+            with urlopen(req, timeout=10, context=_get_ssl_context()) as r:
                 results["swiss"] = f"OK: {r.read().decode('utf-8')[:100]}"
     except Exception as e:
         results["swiss"] = f"FAIL: {e}"
@@ -431,8 +479,8 @@ def _pubchem_name_to_smiles(name: str, timeout: int = 15) -> tuple:
                 if not props:
                     last_error = f"No properties returned for '{q}'"
                     continue
-                # 尝试 IsomericSMILES，如果不存在则尝试 CanonicalSMILES
-                smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES", "")
+                # 尝试 IsomericSMILES，如果不存在则尝试 CanonicalSMILES，最后尝试 SMILES
+                smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES") or props[0].get("SMILES", "")
                 if smiles:
                     return smiles, "exact", ""
                 last_error = f"Properties exist but no SMILES field. Keys: {list(props[0].keys())}"
@@ -449,7 +497,7 @@ def _pubchem_name_to_smiles(name: str, timeout: int = 15) -> tuple:
                     continue
                 props = result.get("PropertyTable", {}).get("Properties", [])
                 if props:
-                    smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES", "")
+                    smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES") or props[0].get("SMILES", "")
                     if smiles:
                         return smiles, "cas", ""
 
@@ -475,7 +523,7 @@ def _pubchem_name_to_smiles(name: str, timeout: int = 15) -> tuple:
                     continue
                 props = sm_result.get("PropertyTable", {}).get("Properties", [])
                 if props:
-                    smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES", "")
+                    smiles = props[0].get("IsomericSMILES") or props[0].get("CanonicalSMILES") or props[0].get("SMILES", "")
                     if smiles:
                         return smiles, "similarity", ""
                 last_error = "Similarity: no SMILES found"
@@ -665,12 +713,12 @@ def batch_query_smiles(df: pd.DataFrame, name_col: str = 'compound_name',
 def query_swiss_target_prediction(smiles: str, species: str = "Homo sapiens",
                                   max_retries: int = _MAX_RETRIES) -> tuple:
     """
-    调用 SwissTargetPrediction API 获取靶点预测结果。
+    调用 SwissTargetPrediction 获取靶点预测结果（2026-05 改版后：表单提交 + HTML 解析）。
 
     Args:
         smiles: 化合物的 SMILES
         species: 物种（默认 "Homo sapiens"）
-        max_retries: 429错误重试次数
+        max_retries: 重试次数
 
     Returns:
         (genes_str, target_count, error_msg)
@@ -681,44 +729,147 @@ def query_swiss_target_prediction(smiles: str, species: str = "Homo sapiens",
     if not smiles or smiles in ('NOT_FOUND', 'PENDING', '', 'nan'):
         return "NOT_FOUND", 0, "No SMILES provided"
 
-    url = f"{_ST_BASE}/search"
-    payload = {"smiles": smiles, "species": species}
+    # 物种映射
+    species_map = {
+        "Homo sapiens": "Homo_sapiens",
+        "Mus musculus": "Mus_musculus",
+        "Rattus norvegicus": "Rattus_norvegicus",
+    }
+    org = species_map.get(species, "Homo_sapiens")
+
+    from urllib.parse import urlencode
 
     for attempt in range(max_retries + 1):
-        result = _http_post_json(url, payload, timeout=30)
-        err = result.get("_error", "")
+        try:
+            # Step 1: 提交任务
+            submit_url = "https://www.swisstargetprediction.ch/predict.php"
+            form_data = urlencode({
+                'smiles': smiles,
+                'organism': org,
+                'ioi': '2'
+            }).encode('ascii')
 
-        if not err:
-            try:
-                results = result.get('Results', [])
-                filtered = [r for r in results if float(r.get('Probability', 0)) > _PROB_THRESHOLD]
-                genes = []
-                for r in filtered:
-                    for key in ('Gene', 'Target', 'Symbol'):
-                        g = r.get(key, '')
-                        if g:
-                            genes.append(str(g).strip())
-                            break
-                genes = sorted(set(g for g in genes if g))
-                genes_str = ";".join(genes)
-                return genes_str, len(genes), ""
-            except (KeyError, ValueError, TypeError) as e:
-                return "ERROR", 0, f"Parse error: {e}"
+            submit_req = Request(submit_url, data=form_data, headers={
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://www.swisstargetprediction.ch/',
+                'Origin': 'https://www.swisstargetprediction.ch'
+            })
 
-        # 处理错误
-        if "429" in err or "429" in str(result):
-            wait_time = 2 ** attempt + 1
-            time.sleep(wait_time)
-            continue
-        elif "timeout" in err.lower() or "timed out" in err.lower():
+            with urlopen(submit_req, timeout=60, context=_get_ssl_context()) as resp:
+                submit_html = resp.read().decode('utf-8')
+
+            # Step 2: 提取 job ID
+            job_match = re.search(r'result\.php\?job=(\d+)', submit_html)
+            if not job_match:
+                # 可能是同步返回了结果页面
+                if 'Target' in submit_html and 'Probability' in submit_html:
+                    return _parse_stp_result_html(submit_html)
+                return "ERROR", 0, "No job ID in response"
+
+            job_id = job_match.group(1)
+
+            # Step 3: 等待计算完成（最多等 90 秒）
+            result_url = None
+            for wait in range(18):
+                time.sleep(5)
+                check_url = "https://www.swisstargetprediction.ch/result.php?job=%s&organism=%s" % (job_id, org)
+                check_req = Request(check_url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                with urlopen(check_req, timeout=30, context=_get_ssl_context()) as resp:
+                    check_html = resp.read().decode('utf-8')
+                    if 'Target' in check_html and 'Probability' in check_html:
+                        result_url = check_html
+                        break
+                    if 'finished' in check_html.lower() or 'result' in check_html.lower():
+                        # 可能重定向到了结果页
+                        result_url = check_html
+                        break
+
+            if not result_url:
+                return "ERROR", 0, "Calculation timeout (>90s)"
+
+            # Step 4: 解析结果
+            return _parse_stp_result_html(result_url)
+
+        except URLError as e:
+            if isinstance(e.reason, ssl.SSLCertVerificationError):
+                # SSL 错误，重试
+                if attempt < max_retries:
+                    time.sleep(2)
+                    continue
+                return "ERROR", 0, f"SSL error: {e.reason}"
+            return "ERROR", 0, str(e)
+        except Exception as e:
             if attempt < max_retries:
                 time.sleep(2)
                 continue
-            return "ERROR", 0, "Timeout"
-        else:
-            return "ERROR", 0, err
+            return "ERROR", 0, str(e)
 
     return "ERROR", 0, "Max retries exceeded"
+
+
+def _parse_stp_result_html(html: str) -> tuple:
+    """
+    解析 SwissTargetPrediction 结果页面的 HTML 表格。
+
+    Returns: (genes_str, target_count, error_msg)
+    """
+    try:
+        # 找到表格
+        table_match = re.search(r'<table[^>]*>(.*?)</table>', html, re.DOTALL)
+        if not table_match:
+            return "ERROR", 0, "No result table found"
+
+        table = table_match.group(1)
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table, re.DOTALL)
+
+        if len(rows) < 2:
+            return "ERROR", 0, "Table has no data rows"
+
+        # 解析表头
+        header_row = rows[0]
+        headers = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', header_row, re.DOTALL)
+        headers_clean = [re.sub(r'<[^>]+>', '', h).strip() for h in headers]
+
+        # 找到 Common name 和 Probability 列的索引
+        gene_idx = None
+        prob_idx = None
+        for i, h in enumerate(headers_clean):
+            hl = h.lower()
+            if 'common name' in hl or 'gene' in hl:
+                gene_idx = i
+            elif 'probability' in hl:
+                prob_idx = i
+
+        if gene_idx is None:
+            gene_idx = 1  # 默认第二列是 Common name
+        if prob_idx is None:
+            prob_idx = len(headers_clean) - 2  # 倒数第二列
+
+        # 解析数据行
+        genes = []
+        for row in rows[1:]:
+            cells = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.DOTALL)
+            cleaned = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+
+            if len(cleaned) > max(gene_idx, prob_idx):
+                gene = cleaned[gene_idx].strip()
+                try:
+                    prob = float(cleaned[prob_idx])
+                except (ValueError, IndexError):
+                    prob = 0
+
+                if gene and prob > _PROB_THRESHOLD:
+                    genes.append(gene)
+
+        genes = sorted(set(genes))
+        genes_str = ";".join(genes)
+        return genes_str, len(genes), ""
+
+    except Exception as e:
+        return "ERROR", 0, f"Parse error: {e}"
 
 
 def batch_swiss_target_prediction(df: pd.DataFrame, smiles_col: str = 'SMILES',
