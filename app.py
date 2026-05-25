@@ -48,14 +48,14 @@ except ImportError:
     db_query_compound_with_fallback = db_get_stats = import_smiles_from_csv = None
 
 try:
-    from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online, get_cache_status
-except ImportError:
-    match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = None
-
-try:
     import app_backup
 except ImportError:
     app_backup = None
+
+try:
+    import network_pharma_discover as npd
+except ImportError:
+    npd = None
 
 try:
     from multivariate_stats import (
@@ -2047,6 +2047,229 @@ def main():
                                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                                     except Exception as e:
                                         st.error(f"富集分析失败: {e}")
+
+                    # ============================================================
+                    # 步骤④：靶点-疾病关联分析
+                    # ============================================================
+                    with st.expander("④ 靶点-疾病关联分析（DisGeNET）"):
+                        st.markdown("将 SwissTargetPrediction 靶点基因与 DisGeNET 疾病数据库关联")
+                        disgenet_token = st.text_input(
+                            "DisGeNET Token",
+                            value="8e66d06a-746a-4e57-8e58-54861e755b1f",
+                            type="password",
+                            help="DisGeNET API Token（已有默认token）"
+                        )
+                        disgenet_thresh = st.slider("Score 阈值", 0.0, 1.0, 0.0, 0.05, format="%.2f")
+
+                        if st.button("查询靶点-疾病关联", type="secondary"):
+                            genes_for_disease = []
+                            # 优先从 session_state 取 SwissTargetPrediction 结果
+                            if st.session_state.get('target_df') is not None:
+                                for _, row in st.session_state['target_df'].iterrows():
+                                    tg = str(row.get('Predicted_Targets', ''))
+                                    if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
+                                        for g in tg.split(';'):
+                                            g = g.strip()
+                                            if g:
+                                                genes_for_disease.append(g)
+                            # 其次从 enrichment 结果的 Genes 列提取
+                            elif st.session_state.get('enrichment_df') is not None:
+                                for _, r in st.session_state['enrichment_df'].iterrows():
+                                    for g in str(r.get('Genes', '')).split(';'):
+                                        g = g.strip()
+                                        if g:
+                                            genes_for_disease.append(g)
+
+                            genes_for_disease = list(set(genes_for_disease))
+                            if not genes_for_disease:
+                                st.warning("无基因列表，请先运行步骤②或③")
+                            else:
+                                st.info(f"正在查询 {len(genes_for_disease)} 个基因的疾病关联...")
+                                with st.spinner("查询 DisGeNET..."):
+                                    try:
+                                        dis_result = npd.npd_disease_query(
+                                            genes_for_disease,
+                                            token=disgenet_token,
+                                            threshold=disgenet_thresh
+                                        )
+                                        st.session_state['disease_df'] = dis_result
+                                        if len(dis_result) > 0:
+                                            st.success(f"找到 {len(dis_result)} 条关联记录")
+                                            st.dataframe(dis_result[['Gene', 'Disease', 'Score', 'Source']].head(100), height=300)
+                                            b = io.BytesIO()
+                                            with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                                dis_result.to_excel(w, index=False, sheet_name='Disease_Association')
+                                            b.seek(0)
+                                            st.download_button("下载疾病关联结果", data=b.getvalue(),
+                                                file_name="disease_association.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                        else:
+                                            st.info("未找到疾病关联记录（DisGeNET API 可能需要有效 token 或网络连接）")
+                                    except Exception as e:
+                                        st.error(f"查询失败: {e}")
+
+                    # ============================================================
+                    # 步骤⑤：PPI 网络分析
+                    # ============================================================
+                    with st.expander("⑤ PPI 网络分析（STRING）"):
+                        st.markdown("基于 STRING Database 构建蛋白互作网络")
+                        ppi_min_score = st.slider("STRING Score 阈值", 0.0, 1.0, 0.4, 0.05, format="%.2f",
+                                                    help="高于此分数的互作关系才会保留")
+
+                        if st.button("构建 PPI 网络", type="secondary"):
+                            genes_for_ppi = []
+                            if st.session_state.get('target_df') is not None:
+                                for _, row in st.session_state['target_df'].iterrows():
+                                    tg = str(row.get('Predicted_Targets', ''))
+                                    if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
+                                        for g in tg.split(';'):
+                                            g = g.strip()
+                                            if g:
+                                                genes_for_ppi.append(g)
+                            elif st.session_state.get('enrichment_df') is not None:
+                                for _, r in st.session_state['enrichment_df'].iterrows():
+                                    for g in str(r.get('Genes', '')).split(';'):
+                                        g = g.strip()
+                                        if g:
+                                            genes_for_ppi.append(g)
+
+                            genes_for_ppi = list(set(genes_for_ppi))
+                            if not genes_for_ppi:
+                                st.warning("无基因列表")
+                            else:
+                                st.info(f"正在查询 {len(genes_for_ppi)} 个基因的 PPI...")
+                                with st.spinner("查询 STRING..."):
+                                    try:
+                                        ppi_df = npd.npd_ppi_build(genes_for_ppi, min_score=ppi_min_score)
+                                        if len(ppi_df) > 0:
+                                            topo_df = npd.npd_ppi_topology(ppi_df)
+                                            st.session_state['ppi_df'] = ppi_df
+                                            st.session_state['ppi_topo_df'] = topo_df
+                                            st.success(f"找到 {len(ppi_df)} 条互作边，{len(topo_df)} 个节点")
+                                            col1, col2 = st.columns(2)
+                                            with col1:
+                                                st.markdown("**拓扑参数 Top 10（按 Degree）**")
+                                                st.dataframe(topo_df.head(10), height=250)
+                                            with col2:
+                                                st.markdown("**PPI 边列表**")
+                                                st.dataframe(ppi_df.head(20), height=250)
+                                            # 可视化
+                                            img_buf = io.BytesIO()
+                                            try:
+                                                npd.npd_ppi_plot(ppi_df, topo_df, output_path=img_buf)
+                                                img_buf.seek(0)
+                                                st.image(img_buf.getvalue(), caption="PPI Network", width=600)
+                                            except Exception as plot_err:
+                                                st.warning(f"绘图失败: {plot_err}")
+                                            # 下载
+                                            b = io.BytesIO()
+                                            with pd.ExcelWriter(b, engine='openpyxl') as w:
+                                                ppi_df.to_excel(w, index=False, sheet_name='PPI_Edges')
+                                                topo_df.to_excel(w, index=False, sheet_name='PPI_Topology')
+                                            b.seek(0)
+                                            st.download_button("下载 PPI 结果", data=b.getvalue(),
+                                                file_name="ppi_network.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                        else:
+                                            st.info(f"Score>{ppi_min_score} 阈值下无互作边，请降低阈值")
+                                    except Exception as e:
+                                        st.error(f"PPI 构建失败: {e}")
+
+                    # ============================================================
+                    # 步骤⑥：通路可视化增强
+                    # ============================================================
+                    with st.expander("⑥ 通路可视化（气泡图/条形图/Venn 图/网络图）"):
+                        if st.session_state.get('enrichment_df') is not None and len(st.session_state['enrichment_df']) > 0:
+                            enr = st.session_state['enrichment_df']
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                viz_type = st.selectbox("图表类型", ["气泡图", "条形图", "Venn 图", "成分-靶点-通路网络图"])
+                            with col2:
+                                top_n_viz = st.slider("显示条数", 5, 50, 20)
+
+                            try:
+                                if viz_type == "气泡图":
+                                    fig = npd.npd_viz_dotplot(enr, top_n=top_n_viz, color_by="Database")
+                                    st.plotly_chart(fig, width="stretch")
+                                elif viz_type == "条形图":
+                                    fig = npd.npd_viz_bar(enr, top_n=top_n_viz)
+                                    st.plotly_chart(fig, width="stretch")
+                                elif viz_type == "Venn 图":
+                                    db_groups = enr.groupby('Database')
+                                    gene_sets = {}
+                                    for db, grp in db_groups:
+                                        genes = set()
+                                        for g_str in grp['Genes'].dropna():
+                                            for g in str(g_str).split(';'):
+                                                g = g.strip()
+                                                if g:
+                                                    genes.add(g)
+                                        gene_sets[db] = list(genes)[:30]
+                                    if len(gene_sets) >= 2:
+                                        fig = npd.npd_viz_venn(gene_sets)
+                                        st.pyplot(fig)
+                                    else:
+                                        st.info("Venn 图需要至少 2 个数据库的结果")
+                                elif viz_type == "成分-靶点-通路网络图":
+                                    compound_name = st.text_input("化合物名称", value="Quercetin")
+                                    gene_list_viz = []
+                                    if st.session_state.get('target_df') is not None:
+                                        for _, row in st.session_state['target_df'].iterrows():
+                                            tg = str(row.get('Predicted_Targets', ''))
+                                            if tg and tg not in ('NOT_FOUND', 'ERROR', ''):
+                                                for g in tg.split(';'):
+                                                    g = g.strip()
+                                                    if g:
+                                                        gene_list_viz.append(g)
+                                    gene_list_viz = list(set(gene_list_viz))[:30]
+                                    disease_df_viz = st.session_state.get('disease_df')
+                                    fig = npd.npd_viz_network(compound_name, gene_list_viz, enr, disease_df_viz)
+                                    st.pyplot(fig)
+                            except Exception as e:
+                                st.error(f"可视化失败: {e}")
+                        else:
+                            st.info("请先运行步骤③富集分析获取结果")
+
+                    # ============================================================
+                    # 步骤⑦：分子对接
+                    # ============================================================
+                    with st.expander("⑦ 分子对接（HDOCK / CB-Dock）"):
+                        st.markdown("验证化合物与关键靶点的结合活性（在线对接，无需安装软件）")
+                        dock_gene = st.text_input("靶点基因名（如 AKT1）", value="PTGS2")
+                        dock_smiles = st.text_input("化合物 SMILES", value=st.session_state.get('smiles_df', {}).get('SMILES', [''])[0] if isinstance(st.session_state.get('smiles_df'), dict) else "")
+                        dock_method = st.selectbox("对接工具", ["cbdock", "hdock"])
+                        dock_pdb = st.text_input("PDB ID（可选，不填则自动从 UniProt 查询）", value="")
+
+                        if st.button("开始对接", type="secondary"):
+                            if not dock_gene or not dock_smiles:
+                                st.warning("请输入基因名和 SMILES")
+                            else:
+                                with st.spinner("正在提交对接任务，请等待 30-120 秒..."):
+                                    try:
+                                        result = npd.npd_dock_query(
+                                            gene_symbol=dock_gene,
+                                            smiles=dock_smiles,
+                                            pdb_id=dock_pdb if dock_pdb else None,
+                                            method=dock_method
+                                        )
+                                        st.session_state['dock_result'] = result
+                                        if result['status'] == 'done':
+                                            score = result.get('score')
+                                            score_str = f"{score:.2f} kcal/mol" if score else "N/A"
+                                            st.success(f"对接完成！结合能: {score_str}")
+                                            st.markdown(f"**基因:** {result.get('gene')}")
+                                            st.markdown(f"**PDB:** {result.get('pdb_id')}")
+                                            st.markdown(f"**SMILES:** {result.get('smiles')}")
+                                            if score and score < -7:
+                                                st.markdown("🟢 **较强结合（< -7 kcal/mol）**")
+                                            elif score:
+                                                st.markdown(f"参考阈值：< -7 kcal/mol 为较强结合")
+                                        elif result['status'] == 'pending':
+                                            st.info("任务进行中，请稍后重试")
+                                        else:
+                                            st.error(f"对接失败: {result.get('note', '未知错误')}")
+                                    except Exception as e:
+                                        st.error(f"对接出错: {e}")
 
     else:
         st.info("Please upload files in the sidebar and click **Start Analysis** to begin.")
