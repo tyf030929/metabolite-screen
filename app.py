@@ -58,6 +58,11 @@ except ImportError:
     npd = None
 
 try:
+    from pharma_cache import match_pharma_online, query_pharma_info, compute_pharma_evidence_score as compute_pharma_evidence_score_online, get_cache_status
+except ImportError:
+    match_pharma_online = query_pharma_info = compute_pharma_evidence_score_online = get_cache_status = None
+
+try:
     from multivariate_stats import (
         detect_species_columns_from_diff, build_abundance_matrix, compute_log2fc,
         run_pca, run_plsda, run_oplsda, permutation_test_plsda,
