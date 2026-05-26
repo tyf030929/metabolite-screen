@@ -238,13 +238,12 @@ def _http_get_text(url: str, timeout: int = 15, headers: dict = None) -> dict:
 def npd_disease_query(gene_list: list, token: str = "",
                       threshold: float = 0.0) -> pd.DataFrame:
     """
-    查询基因-疾病关联（DisGeNET API）。
+    查询基因-疾病关联（UniProt REST API）。
 
     Args:
         gene_list: 基因符号列表，如 ["ABCB1", "ABCC1"]
-        token: DisGeNET API token
-               默认 "8e66d06a-746a-4e57-8e58-54861e755b1f"
-        threshold: 最低 score 阈值（0~1），默认 0.0
+        token: DisGeNET API token（仅保留参数兼容性，不再使用）
+        threshold: 最低 score 阈值（0~1），默认 0.0（UniProt 无 score，始终返回 1.0）
 
     Returns:
         DataFrame，列：[Gene, Disease, Score, Source, Disease_ID]
@@ -253,63 +252,76 @@ def npd_disease_query(gene_list: list, token: str = "",
     if not gene_list:
         return pd.DataFrame(columns=["Gene", "Disease", "Score", "Source", "Disease_ID"])
 
-    if not token:
-        token = "8e66d06a-746a-4e57-8e58-54861e755b1f"
-
     rows = []
-    headers_auth = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
 
     for gene in gene_list:
         gene = str(gene).strip()
         if not gene:
             continue
-        # DisGeNET moved from disgenet.org to disgenet.com in 2024
-        base_url = "https://www.disgenet.com/api/vda/gene"
-        url = f"{base_url}/{gene}"
-        result = _http_get_json(url, timeout=20, headers=headers_auth)
+
+        # 步骤1：通过 search API 获取 UniProt accession（不能用 gene direct URL）
+        # 注意：UniProt search API 不支持 comments 字段，必须分两步走
+        search_url = (
+            f"https://rest.uniprot.org/uniprotkb/search"
+            f"?query=gene:{gene}+AND+organism_id:9606"
+            f"&format=json&size=5&fields=accession,gene_names"
+        )
+        result = _http_get_json(search_url, timeout=20)
 
         if "_error" in result:
-            # 尝试 curl
-            if _has_curl:
-                try:
-                    curl_cmd = [
-                        "curl.exe", "-s", "-S",
-                        "--max-time", "20",
-                        "-H", f"Authorization: Bearer {token}",
-                        "-H", "Accept: application/json",
-                        url
-                    ]
-                    raw = subprocess.check_output(curl_cmd, stderr=subprocess.STDOUT, timeout=25)
-                    result = json.loads(raw.decode("utf-8"))
-                except Exception:
-                    result = {"_error": "curl also failed"}
-            if "_error" in result:
+            time.sleep(0.3)
+            continue
+
+        results_list = result.get("results", [])
+        if not results_list:
+            time.sleep(0.3)
+            continue
+
+        # 步骤2：用 accession 获取完整 JSON，提取 DISEASE comments
+        for entry in results_list:
+            accession = entry.get("primaryAccession", "")
+            if not accession:
                 continue
 
-        # 解析疾病列表
-        diseases = result.get("diseases", [])
-        if isinstance(diseases, dict):
-            diseases = diseases.get("diseases", [])
-        if not isinstance(diseases, list):
-            diseases = []
+            gene_in_entry = ""
+            gene_list = entry.get("genes", [])
+            if gene_list:
+                gene_in_entry = gene_list[0].get("geneName", {}).get("value", "")
 
-        for d in diseases:
-            score = float(d.get("score", 0) or 0)
-            if score < threshold:
+            # 获取完整 JSON（包含 disease comments）
+            full_url = f"https://rest.uniprot.org/uniprotkb/{accession}.json"
+            full_result = _http_get_json(full_url, timeout=20)
+
+            if "_error" in full_result:
                 continue
-            rows.append({
-                "Gene": gene,
-                "Disease": d.get("disease_name", ""),
-                "Score": score,
-                "Source": d.get("source", ""),
-                "Disease_ID": d.get("disease_id", "")
-            })
 
-        time.sleep(0.5)
+            comments = full_result.get("comments", [])
+            if not isinstance(comments, list):
+                comments = []
+
+            for comment in comments:
+                if comment.get("commentType") != "DISEASE":
+                    continue
+
+                disease_data = comment.get("disease", {})
+                disease_id = disease_data.get("diseaseAccession", "")
+                disease_name = disease_data.get("diseaseId", "") or disease_data.get("description", "")
+
+                if not disease_name:
+                    continue
+
+                # UniProt 没有 score，默认 1.0
+                score = 1.0
+
+                rows.append({
+                    "Gene": gene_in_entry or gene,
+                    "Disease": disease_name,
+                    "Score": score,
+                    "Source": "UniProt",
+                    "Disease_ID": disease_id,
+                })
+
+        time.sleep(0.3)
 
     if not rows:
         return pd.DataFrame(columns=["Gene", "Disease", "Score", "Source", "Disease_ID"])
@@ -591,10 +603,13 @@ def npd_viz_dotplot(enr_df: pd.DataFrame, top_n: int = 20,
     plot_df['-log10P'] = -np.log10(pvals)
 
     if color_by == "Database" and "Database" in plot_df.columns:
-        color_col = plot_df["Database"]
+        # 按数据库分组配色：用数字编码，plotly 用 colorscale 自动分配颜色
+        db_unique = plot_df["Database"].unique()
+        db_map = {db: i for i, db in enumerate(db_unique)}
+        color_col = plot_df["Database"].map(db_map).tolist()
         color_discrete = None
     else:
-        color_col = plot_df['-log10P']
+        color_col = plot_df['-log10P'].tolist()
         color_discrete = None
 
     fig = go.Figure(go.Scatter(
